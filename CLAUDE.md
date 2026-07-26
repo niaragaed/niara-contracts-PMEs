@@ -56,9 +56,11 @@ oferta) e política de transferência plugável (secundário desligado por padr�
   (lock-up + allowlist + flag de liberação) é Fase 3 — trocável por governança, sem
   tocar no token.
 - **Governança com timelock desde o início** (delay mínimo 1h, padrão
-  propose→execute, portado de `niara-contracts`). Papéis: `AGENTE_ROLE`
+  propose→execute, portado de `niara-contracts`). Papéis `AGENTE_ROLE`
   (agente/plataforma, atestador/emissor autorizado) e `EMISSOR_ROLE` (reservado para
-  ações futuras específicas da empresa emissora; ver `TimelockedAccessControl`).
+  ações futuras específicas da empresa emissora) são declarados em `EmissaoGateway` e
+  `ParticipacaoTokenFactory` — `TimelockedAccessControl` em si é agnóstico a papéis
+  concretos (só conhece `DEFAULT_ADMIN_ROLE`, herdado do `AccessControl` da OZ).
 - **Sem `CashbackDistributor`.** Taxa fica dormente/ausente nesta fase — não inserir
   nenhum número de bps de taxa até instrução explícita.
 - **Unidade on-chain para aportes**: `MockBRL` (mock, 18 casas decimais) na testnet.
@@ -105,10 +107,10 @@ era implantado uma vez por ativo.
 
 - **Fase 0** (concluída) — fundação: projeto Foundry, convenções, `MockBRL`,
   `CLAUDE.md`.
-- **Fase 1** (em andamento) — `ParticipacaoToken` clonável +
+- **Fase 1** (concluída) — `ParticipacaoToken` clonável +
   `ITransferPolicy`/`DenyAllTransferPolicy` + `EmissaoGateway` +
   `ParticipacaoTokenFactory` + `TimelockedAccessControl` + testes unitários e de
-  invariante.
+  invariante. Ver "Arquitetura da Fase 1" e "Resultados de teste (Fase 1)" abaixo.
 - **Fase 2** (futura) — escrow de aportes em `MockBRL`, ciclo de vida da oferta
   (captação → liquidação → devolução se meta não atingida).
 - **Fase 3** (futura) — política de transferência sofisticada (lock-up + allowlist +
@@ -116,6 +118,81 @@ era implantado uma vez por ativo.
 - **Fase 4** (futura) — categorias adicionais (dívida/recebível).
 - **Fase 5** (futura) — a definir; possivelmente integração com o site (`niara-PMEs`)
   e/ou modelo de receita.
+
+---
+
+## Arquitetura da Fase 1
+
+```
+ParticipacaoTokenFactory (TimelockedAccessControl, Pausable)
+  ├─ implementacao (template ParticipacaoToken, trocável via timelock)
+  ├─ gateway (EmissaoGateway, fixo na construção)
+  ├─ transferPolicyPadrao (trocável via timelock)
+  └─ criarOferta(...) [AGENTE_ROLE] → Clones.clone(implementacao) → initialize(...)
+
+EmissaoGateway (TimelockedAccessControl)
+  ├─ AGENTE_ROLE — atestarCotas / emitir / pausarToken / despausarToken
+  └─ EMISSOR_ROLE — reservado, sem uso funcional nesta fase
+
+ParticipacaoToken (Initializable, ERC20Upgradeable, PausableUpgradeable)
+  ├─ gateway — único endereço autorizado a chamar setCotasAutorizadas/mint/pause/unpause
+  ├─ cotasAutorizadas — teto, só sobe (setCotasAutorizadas reverte se novoTeto < atual)
+  ├─ transferPolicy (ITransferPolicy) — consultado em toda transferência titular→titular
+  └─ invariante: totalSupply() <= cotasAutorizadas, sempre
+
+DenyAllTransferPolicy (ITransferPolicy) — canTransfer sempre false (Fase 1)
+```
+
+Autorização é por endereço único (`gateway`) no token — não por `AccessControl` — porque
+o token é um clone leve replicado por oferta; a governança por papéis fica concentrada em
+`EmissaoGateway`/`ParticipacaoTokenFactory`, que não são clonados.
+
+Troca de `implementacao`/`transferPolicyPadrao` na factory (via timelock) só afeta
+ofertas **futuras** — clones já criados mantêm a lógica/política vigente no momento em
+que foram clonados (testado em
+`test_SetImplementacao_OnlyAffectsFutureOffers`).
+
+---
+
+## Resultados de teste (Fase 1)
+
+- `forge build`: sem erros.
+- `forge test`: 76/76 passando (unitários + 6 invariantes).
+- `forge coverage` nos contratos principais (`src/`, exceto script de deploy):
+  `EmissaoGateway`, `TimelockedAccessControl`, `ParticipacaoToken`,
+  `ParticipacaoTokenFactory` e `MockBRL` — **100% linha/statement/branch/função**.
+  `DenyAllTransferPolicy` mostra 50%/0% na única linha (`return false`) por uma
+  limitação conhecida do instrumentador de cobertura do Foundry com funções `pure` de
+  retorno literal — a contagem de hits da própria função (2336, via fuzz test +
+  handler) confirma que ela é exercitada extensivamente; não é uma lacuna real de
+  teste. `script/DeployFase1.s.sol` fica em 0% de propósito — scripts de deploy não
+  são cobertos pela suíte de testes, só validados por execução manual (ver abaixo).
+- Invariantes (`forge test --match-contract InvariantTest`) rodam na escala
+  configurada — `runs=256 * depth=100` = 25.600 chamadas por invariante — sem nenhuma
+  violação, com ~35-40% das chamadas revertendo de propósito (caminhos "caóticos"
+  exercitando os `revert`s). As 6 invariantes verificadas:
+  1. `totalSupply() <= cotasAutorizadas`, para todo token criado.
+  2. `sum(saldos) == totalSupply()`, para todo token criado.
+  3. Nenhuma chamada não autorizada a `mint`/`setCotasAutorizadas`/`pause`/`unpause`
+     do token (fora do `gateway`) jamais teve sucesso.
+  4. Nenhuma chamada sem `AGENTE_ROLE` a `atestarCotas`/`emitir`/`pausarToken`/
+     `despausarToken`/`criarOferta` jamais teve sucesso.
+  5. Nenhuma transferência titular→titular (`transfer`/`transferFrom`) jamais teve
+     sucesso (política nega-tudo).
+  6. Nenhum clone já inicializado pôde ser reinicializado.
+- `script/DeployFase1.s.sol` foi validado de duas formas:
+  - **Dry-run** (`forge script script/DeployFase1.s.sol`, sem `--rpc-url` nem
+    `--broadcast`): fluxo completo (deploy → conceder `AGENTE_ROLE` via
+    propose/`vm.warp`/execute → criar oferta → atestar → emitir) roda com sucesso,
+    pois `vm.warp` é honrado na simulação local.
+  - **Broadcast contra `anvil` local** (nunca Sepolia): falha, de propósito, em
+    `executeGrantRole` com `TimelockNotElapsed` — porque, ao transmitir de verdade,
+    o tempo do timelock precisa decorrer no relógio real da chain, e `vm.warp` não
+    afeta um nó já em execução recebendo transações reais. Comportamento correto e
+    esperado, documentado no NatSpec do script — não é um bug. Para um demo real
+    contra `anvil` ao vivo, seria necessário ou esperar `TIMELOCK_DELAY` segundos de
+    verdade entre duas transmissões, ou avançar o relógio do `anvil` via
+    `evm_increaseTime`/`evm_mine` (não implementado nesta fase).
 
 ---
 
@@ -191,9 +268,13 @@ forge test --match-contract Invariant -vv   # rodada de invariantes na escala co
 
 ## Pendências conhecidas
 
-- `EMISSOR_ROLE` está definido em `TimelockedAccessControl` mas ainda sem uso
-  funcional em nenhum contrato da Fase 1 — reservado para ações específicas da
-  empresa emissora em fases futuras (ex.: propor a própria oferta).
+- `EMISSOR_ROLE` está definido em `EmissaoGateway` mas ainda sem uso funcional em
+  nenhum contrato da Fase 1 — reservado para ações específicas da empresa emissora em
+  fases futuras (ex.: propor a própria oferta).
+- `ParticipacaoTokenFactory.gateway` é fixado na construção — não há setter
+  timelocked para trocá-lo nesta fase (só `implementacao` e `transferPolicyPadrao`
+  são trocáveis). Se uma fase futura precisar substituir o `EmissaoGateway`, isso
+  exigirá adicionar esse setter então.
 - Nenhum deploy em Sepolia foi feito ainda. `script/DeployFase1.s.sol` só roda local
   (`anvil`) ou em dry-run.
 - Nenhuma auditoria externa foi feita. Não descrever este código como auditado em
