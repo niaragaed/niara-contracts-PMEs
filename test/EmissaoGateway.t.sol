@@ -134,4 +134,100 @@ contract EmissaoGatewayTest is Test {
         gateway.despausarToken(address(token));
         assertFalse(token.paused());
     }
+
+    // ── registrarCaptacao ───────────────────────────────────────────────────────────────
+
+    address public captacaoFake = makeAddr("captacaoFake");
+
+    function test_RegistrarCaptacao_OnlyAgente() public {
+        vm.prank(estranho);
+        vm.expectRevert(
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, estranho, agenteRole)
+        );
+        gateway.registrarCaptacao(address(token), captacaoFake);
+    }
+
+    function test_RegistrarCaptacao_SetsAuthorizedCaptacao() public {
+        vm.prank(agente);
+        gateway.registrarCaptacao(address(token), captacaoFake);
+        assertEq(gateway.ofertaCaptacaoAutorizada(address(token)), captacaoFake);
+    }
+
+    function test_RegistrarCaptacao_EmitsEvent() public {
+        vm.expectEmit(true, true, true, true, address(gateway));
+        emit EmissaoGateway.CaptacaoRegistrada(address(token), captacaoFake);
+        vm.prank(agente);
+        gateway.registrarCaptacao(address(token), captacaoFake);
+    }
+
+    function test_RegistrarCaptacao_CanRevokeWithZeroAddress() public {
+        vm.prank(agente);
+        gateway.registrarCaptacao(address(token), captacaoFake);
+
+        vm.prank(agente);
+        gateway.registrarCaptacao(address(token), address(0));
+        assertEq(gateway.ofertaCaptacaoAutorizada(address(token)), address(0));
+    }
+
+    // ── emitirParaCaptacao ──────────────────────────────────────────────────────────────
+
+    function test_EmitirParaCaptacao_OnlyAuthorizedCaptacao() public {
+        vm.prank(agente);
+        gateway.atestarCotas(address(token), 1_000 ether);
+
+        vm.prank(agente);
+        gateway.registrarCaptacao(address(token), captacaoFake);
+
+        vm.prank(estranho);
+        vm.expectRevert(EmissaoGateway.NaoAutorizado.selector);
+        gateway.emitirParaCaptacao(address(token), investidor, 100 ether);
+    }
+
+    function test_EmitirParaCaptacao_MintsToInvestidor() public {
+        vm.prank(agente);
+        gateway.atestarCotas(address(token), 1_000 ether);
+
+        vm.prank(agente);
+        gateway.registrarCaptacao(address(token), captacaoFake);
+
+        vm.prank(captacaoFake);
+        gateway.emitirParaCaptacao(address(token), investidor, 100 ether);
+
+        assertEq(token.balanceOf(investidor), 100 ether);
+    }
+
+    function test_EmitirParaCaptacao_RevertsBeyondAttestedCap() public {
+        vm.prank(agente);
+        gateway.atestarCotas(address(token), 100 ether);
+
+        vm.prank(agente);
+        gateway.registrarCaptacao(address(token), captacaoFake);
+
+        vm.prank(captacaoFake);
+        vm.expectRevert(
+            abi.encodeWithSelector(ParticipacaoToken.MintExcedeCotasAutorizadas.selector, 101 ether, 100 ether)
+        );
+        gateway.emitirParaCaptacao(address(token), investidor, 101 ether);
+    }
+
+    function test_EmitirParaCaptacao_EmitsEvent() public {
+        vm.prank(agente);
+        gateway.atestarCotas(address(token), 1_000 ether);
+        vm.prank(agente);
+        gateway.registrarCaptacao(address(token), captacaoFake);
+
+        vm.expectEmit(true, true, true, true, address(gateway));
+        emit EmissaoGateway.CotasEmitidasViaCaptacao(address(token), investidor, 100 ether);
+        vm.prank(captacaoFake);
+        gateway.emitirParaCaptacao(address(token), investidor, 100 ether);
+    }
+
+    function test_EmitirParaCaptacao_RevertsWhenNoCaptacaoRegistered() public {
+        vm.prank(agente);
+        gateway.atestarCotas(address(token), 1_000 ether);
+
+        vm.prank(captacaoFake);
+        vm.expectRevert(EmissaoGateway.NaoAutorizado.selector);
+        gateway.emitirParaCaptacao(address(token), investidor, 100 ether);
+    }
 }
