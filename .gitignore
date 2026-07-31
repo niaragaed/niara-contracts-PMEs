@@ -18,6 +18,10 @@ coverage/
 # Docs
 docs/
 
+# Enderecos persistidos entre os dois scripts da demo Sepolia (artefato local, sem segredos,
+# mas regeravel a cada deploy — nao faz sentido versionar)
+script/output/
+
 # Dotenv file — segredos nunca versionados
 .env
 .env.*
