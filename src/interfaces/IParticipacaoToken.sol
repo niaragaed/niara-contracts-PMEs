@@ -24,6 +24,10 @@ interface IParticipacaoToken {
     /// @notice Cunha cotas para `to`, respeitando `totalSupply() + amount <= cotasAutorizadas`.
     function mint(address to, uint256 amount) external;
 
+    /// @notice Troca a política de transferência consultada em toda transferência
+    /// titular→titular (ver `ParticipacaoToken.setTransferPolicy`, Fase 3).
+    function setTransferPolicy(address novaPolitica) external;
+
     function pause() external;
     function unpause() external;
 }

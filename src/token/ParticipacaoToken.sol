@@ -44,6 +44,7 @@ contract ParticipacaoToken is Initializable, ERC20Upgradeable, PausableUpgradeab
 
     event CotasAutorizadasAlteradas(uint256 tetoAntigo, uint256 tetoNovo);
     event CotasEmitidas(address indexed to, uint256 amount);
+    event TransferPolicyAlterada(address indexed politicaAntiga, address indexed politicaNova);
 
     error ZeroAddress();
     error NaoAutorizado();
@@ -105,6 +106,20 @@ contract ParticipacaoToken is Initializable, ERC20Upgradeable, PausableUpgradeab
         if (totalSolicitado > cotasAutorizadas) revert MintExcedeCotasAutorizadas(totalSolicitado, cotasAutorizadas);
         _mint(to, amount);
         emit CotasEmitidas(to, amount);
+    }
+
+    /// @notice Troca a política de transferência consultada em toda transferência
+    /// titular→titular. Não existia até a Fase 3 — adicionada aqui (em vez de só na factory,
+    /// que só afeta ofertas futuras) para permitir trocar a política de uma oferta já viva,
+    /// ex.: sair de `DenyAllTransferPolicy` para `RestrictedTransferPolicy` quando a captação
+    /// já está encerrada. Restrita ao `gateway`, que só a expõe via
+    /// `EmissaoGateway.proposeSetTransferPolicy`/`executeSetTransferPolicy` (timelock — trocar
+    /// política é decisão sensível, ver CLAUDE.md).
+    function setTransferPolicy(address novaPolitica) external onlyGateway {
+        if (novaPolitica == address(0)) revert ZeroAddress();
+        address politicaAntiga = transferPolicy;
+        transferPolicy = novaPolitica;
+        emit TransferPolicyAlterada(politicaAntiga, novaPolitica);
     }
 
     function pause() external onlyGateway {

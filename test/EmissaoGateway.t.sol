@@ -230,4 +230,61 @@ contract EmissaoGatewayTest is Test {
         vm.expectRevert(EmissaoGateway.NaoAutorizado.selector);
         gateway.emitirParaCaptacao(address(token), investidor, 100 ether);
     }
+
+    // ── Troca de política de transferência via timelock (Fase 3) ──────────────────────────
+
+    function test_SetTransferPolicy_RequiresTimelock() public {
+        DenyAllTransferPolicy novaPolitica = new DenyAllTransferPolicy();
+
+        vm.prank(admin);
+        gateway.proposeSetTransferPolicy(address(token), address(novaPolitica));
+
+        vm.prank(admin);
+        vm.expectRevert();
+        gateway.executeSetTransferPolicy(address(token), address(novaPolitica));
+
+        vm.warp(block.timestamp + TIMELOCK_DELAY);
+        vm.prank(admin);
+        gateway.executeSetTransferPolicy(address(token), address(novaPolitica));
+
+        assertEq(token.transferPolicy(), address(novaPolitica));
+    }
+
+    function test_SetTransferPolicy_OnlyAdminCanPropose() public {
+        DenyAllTransferPolicy novaPolitica = new DenyAllTransferPolicy();
+        vm.prank(estranho);
+        vm.expectRevert(
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, estranho, DEFAULT_ADMIN_ROLE)
+        );
+        gateway.proposeSetTransferPolicy(address(token), address(novaPolitica));
+    }
+
+    function test_SetTransferPolicy_RevertsForZeroToken() public {
+        DenyAllTransferPolicy novaPolitica = new DenyAllTransferPolicy();
+        vm.prank(admin);
+        vm.expectRevert(EmissaoGateway.ZeroAddress.selector);
+        gateway.proposeSetTransferPolicy(address(0), address(novaPolitica));
+    }
+
+    function test_SetTransferPolicy_RevertsForZeroPolitica() public {
+        vm.prank(admin);
+        vm.expectRevert(EmissaoGateway.ZeroAddress.selector);
+        gateway.proposeSetTransferPolicy(address(token), address(0));
+    }
+
+    function test_SetTransferPolicy_EmitsEvents() public {
+        DenyAllTransferPolicy novaPolitica = new DenyAllTransferPolicy();
+        uint256 executeAfter = block.timestamp + TIMELOCK_DELAY;
+
+        vm.expectEmit(true, true, true, true, address(gateway));
+        emit EmissaoGateway.TransferPolicyChangeProposed(address(token), address(novaPolitica), executeAfter);
+        vm.prank(admin);
+        gateway.proposeSetTransferPolicy(address(token), address(novaPolitica));
+
+        vm.warp(block.timestamp + TIMELOCK_DELAY);
+        vm.expectEmit(true, true, true, true, address(gateway));
+        emit EmissaoGateway.TransferPolicyChanged(address(token), address(novaPolitica));
+        vm.prank(admin);
+        gateway.executeSetTransferPolicy(address(token), address(novaPolitica));
+    }
 }

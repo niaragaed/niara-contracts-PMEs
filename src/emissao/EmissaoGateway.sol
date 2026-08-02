@@ -35,6 +35,8 @@ contract EmissaoGateway is TimelockedAccessControl {
     event TokenDespausado(address indexed token);
     event CaptacaoRegistrada(address indexed token, address indexed oferta);
     event CotasEmitidasViaCaptacao(address indexed token, address indexed to, uint256 amount);
+    event TransferPolicyChangeProposed(address indexed token, address indexed novaPolitica, uint256 executeAfter);
+    event TransferPolicyChanged(address indexed token, address indexed novaPolitica);
 
     error ZeroAddress();
     error NaoAutorizado();
@@ -85,5 +87,32 @@ contract EmissaoGateway is TimelockedAccessControl {
         if (msg.sender != ofertaCaptacaoAutorizada[token]) revert NaoAutorizado();
         IParticipacaoToken(token).mint(to, cotas);
         emit CotasEmitidasViaCaptacao(token, to, cotas);
+    }
+
+    // ── Troca da política de transferência de um token (sujeita a timelock — decisão sensível,
+    // ver "Arquitetura da Fase 3" no CLAUDE.md) ────────────────────────────────────────────
+    //
+    // `ParticipacaoToken` não existia com um setter de política governado até a Fase 3 — foi
+    // adicionado no próprio token (`setTransferPolicy`, restrito a `onlyGateway`) porque a
+    // troca de política da factory (`transferPolicyPadrao`) só afeta ofertas futuras, e a Fase
+    // 3 precisa poder migrar uma oferta já viva de `DenyAllTransferPolicy` para
+    // `RestrictedTransferPolicy` (ver CLAUDE.md, seção "Pendências conhecidas").
+
+    function proposeSetTransferPolicy(address token, address novaPolitica)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+        returns (uint256 executeAfter)
+    {
+        if (token == address(0) || novaPolitica == address(0)) revert ZeroAddress();
+        bytes32 actionId = keccak256(abi.encode("SET_TRANSFER_POLICY", token, novaPolitica));
+        executeAfter = _scheduleAction(actionId);
+        emit TransferPolicyChangeProposed(token, novaPolitica, executeAfter);
+    }
+
+    function executeSetTransferPolicy(address token, address novaPolitica) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        bytes32 actionId = keccak256(abi.encode("SET_TRANSFER_POLICY", token, novaPolitica));
+        _consumeAction(actionId);
+        IParticipacaoToken(token).setTransferPolicy(novaPolitica);
+        emit TransferPolicyChanged(token, novaPolitica);
     }
 }

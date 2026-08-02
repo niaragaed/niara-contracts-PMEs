@@ -201,6 +201,36 @@ contract ParticipacaoTokenTest is Test {
         token.transferFrom(alice, bob, 10 ether);
     }
 
+    // ── setTransferPolicy (Fase 3) ─────────────────────────────────────────────────────
+
+    function test_SetTransferPolicy_OnlyGateway() public {
+        DenyAllTransferPolicy novaPolitica = new DenyAllTransferPolicy();
+        vm.prank(alice);
+        vm.expectRevert(ParticipacaoToken.NaoAutorizado.selector);
+        token.setTransferPolicy(address(novaPolitica));
+    }
+
+    function test_SetTransferPolicy_UpdatesPolicy() public {
+        DenyAllTransferPolicy novaPolitica = new DenyAllTransferPolicy();
+        vm.prank(gateway);
+        token.setTransferPolicy(address(novaPolitica));
+        assertEq(token.transferPolicy(), address(novaPolitica));
+    }
+
+    function test_SetTransferPolicy_RevertsForZeroAddress() public {
+        vm.prank(gateway);
+        vm.expectRevert(ParticipacaoToken.ZeroAddress.selector);
+        token.setTransferPolicy(address(0));
+    }
+
+    function test_SetTransferPolicy_EmitsEvent() public {
+        DenyAllTransferPolicy novaPolitica = new DenyAllTransferPolicy();
+        vm.expectEmit(true, true, true, true, address(token));
+        emit ParticipacaoToken.TransferPolicyAlterada(address(policy), address(novaPolitica));
+        vm.prank(gateway);
+        token.setTransferPolicy(address(novaPolitica));
+    }
+
     // ── Pausa ───────────────────────────────────────────────────────────────────────────
 
     function test_Pause_OnlyGateway() public {
