@@ -178,13 +178,15 @@ transferência da Fase 3. Continua não sendo o desenho da exchange.
   exchange.** `LiquidacaoSecundaria` nunca mantém saldo de `MockBRL` nem de cotas; toda
   cessão move fundos diretamente entre `vendedor`/`comprador`/`protocoloWallet` via
   `transferFrom`, atomicamente. Mesmo padrão three-party (comprador/vendedor/protocolo)
-  do `NiaraSettlement`. **Nota de transparência**: nesta sessão não foi possível acessar
-  `niara-contracts` localmente (repositório não está no disco, não é público no GitHub, e
-  não há `gh` CLI/credenciais configuradas no ambiente) — a adaptação partiu da descrição
-  funcional do padrão fornecida na instrução da tarefa, combinada com as convenções já
-  estabelecidas neste próprio repositório para taxa/CEI/reentrância (`OfertaCaptacao`,
-  Fase 2). Se uma sessão futura tiver acesso ao arquivo de verdade, vale conferir esta
-  adaptação contra o original.
+  do `NiaraSettlement`. **Referência conferida contra `NiaraSettlement.t.sol`** — o
+  arquivo de origem em si (`niara-contracts`) continua inacessível nesta linha de
+  sessões (não está no disco, não é público no GitHub, sem `gh` CLI/credenciais no
+  ambiente), mas as propriedades do seu comportamento, extraídas de
+  `NiaraSettlement.t.sol`, foram fornecidas na instrução e conferidas item a item contra
+  `LiquidacaoSecundaria` — ver "Conferência contra `NiaraSettlement.t.sol`" logo abaixo
+  para o resultado completo. Se uma sessão futura tiver acesso ao arquivo de verdade,
+  ainda vale conferir contra o original (a conferência feita aqui foi contra o
+  comportamento reportado, não contra o código-fonte em si).
 - **O token continua sendo a única fonte de verdade da elegibilidade.** Quando
   `liquidarCessao` chama `IERC20(token).transferFrom(vendedor, comprador, quantidade)`,
   o `_update` do `ParticipacaoToken` já consulta a `RestrictedTransferPolicy` vigente com
@@ -223,6 +225,48 @@ transferência da Fase 3. Continua não sendo o desenho da exchange.
   `ParticipacaoTokenFactory` apontada na construção — evita liquidar cessões sobre um
   endereço arbitrário que não seja sequer um `ParticipacaoToken` desta plataforma.
 
+### Conferência contra `NiaraSettlement.t.sol`
+
+Após a implementação inicial da Fase 4, o comportamento de `NiaraSettlement` (extraído de
+`NiaraSettlement.t.sol` e fornecido na instrução) foi conferido item a item contra
+`LiquidacaoSecundaria`. Resultado:
+
+| Propriedade | Situação antes | O que mudou |
+|---|---|---|
+| Troca atômica por `allowance`, sem custódia | Já conforme (desde a implementação inicial) | — |
+| Taxa com teto rígido via timelock | Já conforme (`TAXA_BPS_MAXIMA = 100`, `propose`/`execute`) | — |
+| Reentrância bloqueada (lado do pagamento) | Já conforme (`nonReentrant`, testado com `ReentrantMockBRL`) | — |
+| `BuyerEqualsSeller` | Ausente | Adicionado: `VendedorIgualComprador()`, checado antes de qualquer outra validação |
+| `ZeroAmount` (quantidade) | Já conforme (`QuantidadeInvalida`) | — |
+| `ZeroAmount` (valor de pagamento) | Ausente (gap real: `quantidade`/`precoPorCota` != 0 não impedia o `valor` derivado arredondar para `0` por divisão inteira) | Adicionado: `ValorInvalido()`, checado após calcular `valor` |
+| `ZeroAddress` (token/comprador/vendedor) | Ausente em `liquidarCessao` (só existia no construtor/setters) | Adicionado: reaproveita o `ZeroAddress()` já existente, checado primeiro na função |
+| `Pausable` com papel de pausa | Ausente | Adicionado: `pause()`/`unpause()` — **decisão deliberada**: reaproveita `AGENTE_ROLE` (mesmo papel operacional único usado para pausa em `ParticipacaoTokenFactory`/`OfertaCaptacaoFactory`), não um `PAUSER_ROLE` novo como na referência — este repositório nunca fragmentou pausa em um papel à parte, e criar um agora só para este contrato quebraria essa consistência sem necessidade |
+| Reentrância pelo lado do ATIVO | Não aplicável — ver justificativa abaixo | Documentado em vez de forçado um teste artificial |
+| `settle` retorna a taxa cobrada | Ausente (`liquidarCessao` não retornava nada) | Adicionado: `returns (uint256 taxa)` |
+| Guarda de teto repetida no `execute` | Ausente (`executeSetTaxaSecundarioBps` só confiava na validação do `propose`) | Adicionado: mesma checagem de `TAXA_BPS_MAXIMA` repetida no `execute`, coberta por teste que chama `execute` diretamente sem `propose` |
+
+**Reentrância pelo lado do ativo — por que não se aplica aqui**: no `NiaraSettlement` o
+ativo negociado é um ERC-20 arbitrário (qualquer par pode ser listado na exchange), então
+precisa ser tratado como potencialmente malicioso — daí o teste de reentrada também pelo
+lado do ativo. Em `LiquidacaoSecundaria`, `token` já passou pelo pre-flight
+`factory.isOferta(token)`: é sempre um `ParticipacaoToken` clonado da implementação única
+desta plataforma, nunca um ERC-20 arbitrário. O caminho de `transferFrom` desse token
+(`_update` → `ITransferPolicy.canTransfer`, uma `view` sem efeito colateral, →
+`super._update` padrão da OZ) não tem nenhum hook externo com código controlável por
+terceiro. Forçar um teste de reentrada nesse lado exigiria forjar um "ParticipacaoToken"
+malicioso que nunca existiria em produção (a implementação é fixa e auditável, clonada via
+EIP-1167) — o teste seria artificial, não uma prova de nada que possa acontecer de
+verdade. Registrado como justificativa, não como lacuna.
+
+**Divergência intencional — destino da taxa**: `NiaraSettlement` envia a taxa para um
+`CashbackDistributor`. `LiquidacaoSecundaria` envia direto para `protocoloWallet`. Isto é
+deliberado, não uma omissão: este repositório nunca teve `CashbackDistributor` (ver
+"Visão do produto" e "Decisões travadas" no topo deste arquivo) — cashback por volume de
+negociação é um mecanismo da exchange que não se aplica ao modelo primário/secundário
+restrito das PMEs, onde a intermediação já é a plataforma, não um mercado aberto a
+incentivar com cashback. Não reintroduzir `CashbackDistributor` nesta ou em fases
+futuras sem instrução explícita.
+
 ---
 
 ## Linhagem (o que veio de `niara-contracts`)
@@ -254,10 +298,14 @@ copiada literalmente, mas os seguintes padrões foram estudados e adaptados:
   `mint` público irrestrito, rotulado como mock em NatSpec).
 - **`NiaraSettlement.sol`** → padrão adaptado para `src/secundario/LiquidacaoSecundaria.sol`
   (Fase 4): liquidação atômica three-party (comprador/vendedor/protocolo) operando por
-  `allowance`, sem custodiar fundos, com taxa de teto rígido de 100 bps. Ver "Decisões
-  travadas — Fase 4" para a nota de transparência: o arquivo original não estava
-  acessível na sessão em que a Fase 4 foi implementada, então a adaptação partiu da
-  descrição funcional do padrão, não de leitura direta do arquivo.
+  `allowance`, sem custodiar fundos, com taxa de teto rígido de 100 bps. O arquivo-fonte
+  em si nunca esteve acessível nas sessões em que a Fase 4 foi implementada e depois
+  conferida (não está no disco, não é público no GitHub, sem `gh` CLI/credenciais no
+  ambiente) — a implementação inicial partiu da descrição funcional do padrão, e a
+  conferência posterior partiu das propriedades de `NiaraSettlement.t.sol` fornecidas na
+  instrução, não de leitura direta do código-fonte. Ver "Conferência contra
+  `NiaraSettlement.t.sol`" (dentro de "Decisões travadas — Fase 4") para o resultado
+  item a item.
 
 O que **não** veio da exchange (específico deste repositório): factory com clones
 EIP-1167, `ITransferPolicy` plugável, e o modelo de "cotas autorizadas" em vez de
@@ -438,14 +486,19 @@ continua negando tudo — a mesma garantia de "estado inicial travado" que
 ## Arquitetura da Fase 4
 
 ```
-LiquidacaoSecundaria (TimelockedAccessControl, ReentrancyGuard)
+LiquidacaoSecundaria (TimelockedAccessControl, ReentrancyGuard, Pausable)
   ├─ moeda, factory (immutable, fixos na construção — mesma decisão já registrada para
   │  OfertaCaptacaoFactory.gateway/registro/moeda em "Pendências conhecidas")
   ├─ protocoloWallet, taxaSecundarioBps (<= 100, default 0) — trocáveis via timelock
-  └─ liquidarCessao(token, vendedor, comprador, quantidade, precoPorCota) [AGENTE_ROLE]
+  ├─ pause()/unpause() [AGENTE_ROLE] — emergência, mesmo padrão de pausa das factories
+  └─ liquidarCessao(token, vendedor, comprador, quantidade, precoPorCota)
+       [AGENTE_ROLE, whenNotPaused] returns (uint256 taxa)
+       0. guardas defensivas: token/vendedor/comprador != address(0);
+          vendedor != comprador                              — conferidas contra NiaraSettlement
        1. factory.isOferta(token)                          — token conhecido
        2. policy.canTransfer(token, vendedor, comprador, quantidade)  — pre-flight (view)
-       3. valor = (quantidade * precoPorCota) / UNIDADE_COTA; taxa = valor * bps / 10_000
+       3. valor = (quantidade * precoPorCota) / UNIDADE_COTA; reverte se valor == 0
+          taxa = valor * bps / 10_000
        4. moeda.transferFrom(comprador, vendedor, valor - taxa)
        5. se taxa > 0: moeda.transferFrom(comprador, protocoloWallet, taxa)
        6. token.transferFrom(vendedor, comprador, quantidade)  — dispara _update do
@@ -465,6 +518,7 @@ qualquer perna que falhe desfaz as pernas já executadas antes dela na mesma tra
 | Ação | Categoria |
 |---|---|
 | `liquidarCessao` | Operacional (AGENTE, imediato — é por-negociação, não pode esperar 1h) |
+| `pause`/`unpause` | Operacional (AGENTE, imediato — emergência não pode esperar 1h, mesmo padrão de `ParticipacaoTokenFactory`/`OfertaCaptacaoFactory`) |
 | `setTaxaSecundarioBps`, `setProtocoloWallet` | Timelock (1h, propose→execute, `DEFAULT_ADMIN_ROLE`) |
 
 Com a Fase 4, `AGENTE_ROLE` passa a precisar ser concedido **em 6 contratos
@@ -641,19 +695,25 @@ independentes** para operação completa da plataforma (primário + secundário)
 ## Resultados de teste (Fase 4)
 
 - `forge build`: sem erros (mesma suíte da Fase 1 + Fase 2 + Fase 3 + Fase 4).
-- `forge test`: **251/251 passando** — 221 unitários + 30 invariantes (6 da Fase 1 + 12
-  da Fase 2 + 6 da Fase 3 + 6 novos da Fase 4), sem nenhuma regressão nas suítes
-  anteriores. Contribuição da Fase 4: 24 testes em `test/LiquidacaoSecundaria.t.sol`
-  (guardas de entrada, gate da política, conservação com/sem taxa, allowance/saldo
-  insuficiente, governança de taxa/wallet) + 1 em
-  `test/LiquidacaoSecundariaReentrancy.t.sol` + 6 invariantes novas em
-  `test/InvariantSecundario.t.sol`.
+- `forge test`: **263/263 passando** — 233 unitários + 30 invariantes (6 da Fase 1 + 12
+  da Fase 2 + 6 da Fase 3 + 6 da Fase 4), sem nenhuma regressão nas suítes anteriores.
+  Contribuição da Fase 4 original: 24 testes em `test/LiquidacaoSecundaria.t.sol` +
+  1 em `test/LiquidacaoSecundariaReentrancy.t.sol` + 6 invariantes em
+  `test/InvariantSecundario.t.sol`. Contribuição da conferência posterior contra
+  `NiaraSettlement.t.sol` (ver "Decisões travadas — Fase 4"): **+12 testes** em
+  `test/LiquidacaoSecundaria.t.sol` — um revert por guarda nova
+  (`VendedorIgualComprador`, `ValorInvalido`, `ZeroAddress` em `token`/`vendedor`/
+  `comprador`), dois para o retorno de `taxa`, quatro para `pause`/`unpause`
+  (só-AGENTE, bloqueia `liquidarCessao`, restaura após `unpause`), e um para a guarda
+  defensiva de teto repetida em `executeSetTaxaSecundarioBps` chamada diretamente sem
+  `propose`.
 - `forge coverage` nos contratos principais da Fase 4 (`LiquidacaoSecundaria`, e as
   pequenas extensões de `IParticipacaoToken`/nova `IParticipacaoTokenFactory`) — **100%
-  linha/statement/branch/função**, mesma barra das fases anteriores.
-  `DenyAllTransferPolicy` mantém a mesma limitação conhecida do instrumentador (não é
-  lacuna real, ver "Resultados de teste (Fase 1)"). Scripts de deploy/demo ficam em 0%
-  de propósito.
+  linha/statement/branch/função**, mesma barra das fases anteriores. As novas guardas
+  elevaram `LiquidacaoSecundaria` de 44/44 para 52/52 linhas e de 8/8 para 12/12
+  branches, todas cobertas.  `DenyAllTransferPolicy` mantém a mesma limitação conhecida
+  do instrumentador (não é lacuna real, ver "Resultados de teste (Fase 1)"). Scripts de
+  deploy/demo ficam em 0% de propósito.
 - Teste de reentrância dedicado (`test/LiquidacaoSecundariaReentrancy.t.sol`), mesmo
   padrão de `OfertaCaptacaoReentrancy.t.sol` (Fase 2): `ReentrantMockBRL` tenta reentrar
   `liquidarCessao` a partir do próprio `transferFrom` — bloqueada pelo `nonReentrant`, e
@@ -828,7 +888,10 @@ forge test --match-contract Invariant -vv   # roda InvariantTest (Fase 1), Invar
   (desligar `secundarioLiberado` via timelock, o que leva 1h) ou por não conceder mais
   `AGENTE_ROLE` a ninguém capaz de chamar `liquidarCessao` — não implementado como um
   botão único nesta fase.
-- `niara-contracts` (a exchange) não estava acessível localmente nem via GitHub nesta
-  sessão (ver "Decisões travadas — Fase 4" e "Linhagem") — `LiquidacaoSecundaria` foi
-  adaptada da descrição funcional do `NiaraSettlement` fornecida na tarefa, não de
-  leitura direta do arquivo. Vale conferir contra o original assim que houver acesso.
+- `niara-contracts` (a exchange) nunca esteve acessível localmente nem via GitHub em
+  nenhuma sessão até agora (ver "Decisões travadas — Fase 4" e "Linhagem"). A Fase 4 foi
+  implementada a partir da descrição funcional do `NiaraSettlement` e, depois, conferida
+  item a item contra as propriedades de `NiaraSettlement.t.sol` fornecidas na instrução
+  (ver "Conferência contra `NiaraSettlement.t.sol`") — mas isso ainda não é leitura
+  direta do código-fonte original. Vale uma conferência final contra o arquivo de
+  verdade assim que houver acesso.
