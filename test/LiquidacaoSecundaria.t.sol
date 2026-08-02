@@ -156,6 +156,43 @@ contract LiquidacaoSecundariaTest is Test {
         liquidacao.liquidarCessao(address(token), vendedor, comprador, 1, 1);
     }
 
+    // ── Anti-evasão por fracionamento (taxa ativa, valor pequeno demais para a taxa não
+    // truncar a zero) ────────────────────────────────────────────────────────────────────
+
+    function test_LiquidarCessao_RevertsWhenTaxaTruncaAZero() public {
+        _abrirSecundarioParaComprador();
+        _setTaxa(1); // 0.01%
+
+        // valor = (1 ether * 1) / 1 ether = 1 wei de MockBRL — não é zero (passa ValorInvalido),
+        // mas taxa = (1 * 1) / 10_000 = 0 por truncamento de divisão inteira, com taxa ATIVA.
+        vm.prank(agente);
+        vm.expectRevert(LiquidacaoSecundaria.ValorInsuficienteParaPrecisaoDaTaxa.selector);
+        liquidacao.liquidarCessao(address(token), vendedor, comprador, 1 ether, 1);
+    }
+
+    function test_LiquidarCessao_SucceedsWhenValorSuficienteParaPrecisaoDaTaxa() public {
+        _abrirSecundarioParaComprador();
+        _setTaxa(1); // 0.01%, mesma alíquota do teste acima
+
+        // valor = 1.000 ether, taxa = 1.000 ether * 1 / 10_000 = 0,1 ether — não trunca a zero.
+        vm.prank(agente);
+        uint256 taxaCobrada = liquidacao.liquidarCessao(address(token), vendedor, comprador, 10 ether, PRECO_POR_COTA);
+
+        assertEq(taxaCobrada, 0.1 ether);
+        assertEq(token.balanceOf(comprador), 10 ether);
+    }
+
+    function test_LiquidarCessao_TaxaDormenteNuncaTruncaGuard() public {
+        // taxaSecundarioBps == 0 (default) — a guarda não deve disparar mesmo com valor
+        // minúsculo, já que a condição exige taxaSecundarioBps > 0.
+        _abrirSecundarioParaComprador();
+
+        vm.prank(agente);
+        liquidacao.liquidarCessao(address(token), vendedor, comprador, 1 ether, 1);
+
+        assertEq(token.balanceOf(comprador), 1 ether);
+    }
+
     function test_LiquidarCessao_RevertsForVendedorIgualComprador() public {
         vm.prank(agente);
         vm.expectRevert(LiquidacaoSecundaria.VendedorIgualComprador.selector);

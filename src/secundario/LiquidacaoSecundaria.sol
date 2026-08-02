@@ -102,6 +102,16 @@ contract LiquidacaoSecundaria is TimelockedAccessControl, ReentrancyGuard, Pausa
     error TaxaExcedeMaximo(uint256 taxaBps, uint256 maximo);
     error CessaoNaoPermitidaPelaPolitica(address token, address vendedor, address comprador, uint256 quantidade);
 
+    /// @notice Anti-evasão por fracionamento: se a taxa está ativa (`taxaSecundarioBps > 0`)
+    /// mas `valor` é pequeno o bastante para a divisão inteira truncar `taxa` a zero, a
+    /// liquidação reverte em vez de passar sem cobrar nada. Sem essa guarda, uma cessão grande
+    /// poderia ser fatiada em muitas cessões minúsculas, cada uma com taxa arredondada a zero,
+    /// fugindo da taxa inteira — mesma proteção do `NiaraSettlement`
+    /// (`PaymentAmountTooSmallForFeePrecision`) da exchange. Inócua enquanto a taxa do
+    /// secundário estiver dormente (`0`, ver "Regras inegociáveis" no CLAUDE.md), mas fecha a
+    /// brecha antes dela ser ativada.
+    error ValorInsuficienteParaPrecisaoDaTaxa();
+
     constructor(address admin_, address moeda_, address factory_, address protocoloWallet_, uint256 timelockDelay_)
         TimelockedAccessControl(timelockDelay_)
     {
@@ -143,15 +153,21 @@ contract LiquidacaoSecundaria is TimelockedAccessControl, ReentrancyGuard, Pausa
         uint256 valor = (quantidade * precoPorCota) / UNIDADE_COTA;
         if (valor == 0) revert ValorInvalido();
         taxa = (valor * taxaSecundarioBps) / BPS_DENOMINADOR;
+        if (taxaSecundarioBps > 0 && taxa == 0) revert ValorInsuficienteParaPrecisaoDaTaxa();
         uint256 valorVendedor = valor - taxa;
 
         emit CessaoLiquidada(token, vendedor, comprador, quantidade, valor, taxa);
 
+        // Ordem das pernas: pagamento (comprador→vendedor→protocolo) antes do ativo
+        // (vendedor→comprador), na direção OPOSTA ao NiaraSettlement (ativo primeiro, depois
+        // pagamento). Deliberado, não um descuido: sendo tudo atômico, a ordem não muda o
+        // resultado final, mas manter o transferFrom do TOKEN por último reforça, no próprio
+        // código, o que já está documentado no NatSpec do contrato — o pre-flight de
+        // `canTransfer` acima é só para reverter cedo com um erro claro; a checagem que
+        // efetivamente autoriza a cessão é o `_update` do token, disparado por essa última
+        // chamada, então ela fica posicionada como o gate final da sequência.
         moeda.safeTransferFrom(comprador, vendedor, valorVendedor);
         if (taxa > 0) moeda.safeTransferFrom(comprador, protocoloWallet, taxa);
-        // Dispara ParticipacaoToken._update(vendedor, comprador, quantidade), que consulta a
-        // RestrictedTransferPolicy de novo e é a checagem que efetivamente vale — o pre-flight
-        // acima só existe para reverter cedo com um erro claro desta liquidação.
         IERC20(token).safeTransferFrom(vendedor, comprador, quantidade);
     }
 
