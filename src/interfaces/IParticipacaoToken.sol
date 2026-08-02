@@ -28,6 +28,10 @@ interface IParticipacaoToken {
     /// titular→titular (ver `ParticipacaoToken.setTransferPolicy`, Fase 3).
     function setTransferPolicy(address novaPolitica) external;
 
+    /// @notice Política vigente, consultada em toda transferência titular→titular (Fase 4:
+    /// `LiquidacaoSecundaria` usa este getter para o pre-flight de `canTransfer`).
+    function transferPolicy() external view returns (address);
+
     function pause() external;
     function unpause() external;
 }
