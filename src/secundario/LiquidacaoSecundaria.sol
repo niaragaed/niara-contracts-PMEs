@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {TimelockedAccessControl} from "../governance/TimelockedAccessControl.sol";
@@ -33,7 +34,17 @@ import {IParticipacaoTokenFactory} from "../interfaces/IParticipacaoTokenFactory
 /// Ligar o secundário de verdade (a `RestrictedTransferPolicy` retornar `true`) depende de
 /// lock-up decorrido E autorização de negócio/jurídica da plataforma — inteiramente fora deste
 /// contrato (ver `RestrictedTransferPolicy`/CLAUDE.md).
-contract LiquidacaoSecundaria is TimelockedAccessControl, ReentrancyGuard {
+///
+/// Conferido item a item contra `NiaraSettlement.t.sol` da exchange (ver CLAUDE.md, "Decisões
+/// travadas — Fase 4"). Reentrância pelo lado do ATIVO (a cota) não tem teste dedicado, ao
+/// contrário do `NiaraSettlement` — lá o ativo é um ERC-20 arbitrário e precisa ser tratado como
+/// potencialmente malicioso; aqui `token` já passou por `factory.isOferta`, ou seja, é sempre um
+/// `ParticipacaoToken` clonado da implementação única desta plataforma. O caminho de
+/// `transferFrom` desse token (`_update` → `ITransferPolicy.canTransfer`, uma `view` sem efeito
+/// colateral, → `super._update` do ERC20 padrão da OZ) não tem nenhum hook externo com código
+/// controlável por terceiro — não há superfície de reentrância para testar nesse lado sem forjar
+/// um "ParticipacaoToken" artificial que nunca existiria em produção.
+contract LiquidacaoSecundaria is TimelockedAccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     /// @notice Mesmo papel operacional das demais peças da plataforma — submeter uma cessão já
@@ -86,6 +97,8 @@ contract LiquidacaoSecundaria is TimelockedAccessControl, ReentrancyGuard {
     error TokenDesconhecido(address token);
     error QuantidadeInvalida();
     error PrecoInvalido();
+    error ValorInvalido();
+    error VendedorIgualComprador();
     error TaxaExcedeMaximo(uint256 taxaBps, uint256 maximo);
     error CessaoNaoPermitidaPelaPolitica(address token, address vendedor, address comprador, uint256 quantidade);
 
@@ -113,7 +126,11 @@ contract LiquidacaoSecundaria is TimelockedAccessControl, ReentrancyGuard {
         external
         onlyRole(AGENTE_ROLE)
         nonReentrant
+        whenNotPaused
+        returns (uint256 taxa)
     {
+        if (token == address(0) || vendedor == address(0) || comprador == address(0)) revert ZeroAddress();
+        if (vendedor == comprador) revert VendedorIgualComprador();
         if (!factory.isOferta(token)) revert TokenDesconhecido(token);
         if (quantidade == 0) revert QuantidadeInvalida();
         if (precoPorCota == 0) revert PrecoInvalido();
@@ -124,7 +141,8 @@ contract LiquidacaoSecundaria is TimelockedAccessControl, ReentrancyGuard {
         }
 
         uint256 valor = (quantidade * precoPorCota) / UNIDADE_COTA;
-        uint256 taxa = (valor * taxaSecundarioBps) / BPS_DENOMINADOR;
+        if (valor == 0) revert ValorInvalido();
+        taxa = (valor * taxaSecundarioBps) / BPS_DENOMINADOR;
         uint256 valorVendedor = valor - taxa;
 
         emit CessaoLiquidada(token, vendedor, comprador, quantidade, valor, taxa);
@@ -135,6 +153,19 @@ contract LiquidacaoSecundaria is TimelockedAccessControl, ReentrancyGuard {
         // RestrictedTransferPolicy de novo e é a checagem que efetivamente vale — o pre-flight
         // acima só existe para reverter cedo com um erro claro desta liquidação.
         IERC20(token).safeTransferFrom(vendedor, comprador, quantidade);
+    }
+
+    /// @notice Pausa `liquidarCessao` em caso de emergência — mesmo papel operacional
+    /// (`AGENTE_ROLE`) usado para pausa em `ParticipacaoTokenFactory`/`OfertaCaptacaoFactory`,
+    /// não um papel novo (`PAUSER_ROLE`, como na referência) — este repositório já tem um único
+    /// papel operacional por contrato, e criar um segundo só para pausa fragmentaria esse
+    /// padrão sem necessidade.
+    function pause() external onlyRole(AGENTE_ROLE) {
+        _pause();
+    }
+
+    function unpause() external onlyRole(AGENTE_ROLE) {
+        _unpause();
     }
 
     // ── Troca de protocoloWallet (sujeita a timelock — endereço sensível) ─────────────────
@@ -171,7 +202,12 @@ contract LiquidacaoSecundaria is TimelockedAccessControl, ReentrancyGuard {
         emit TaxaSecundarioBpsChangeProposed(novaTaxa, executeAfter);
     }
 
+    /// @dev A checagem de teto é repetida aqui, além do `propose` — inalcançável pelo fluxo
+    /// normal (só existe proposta pendente para um `novaTaxa` que já passou pela checagem em
+    /// `proposeSetTaxaSecundarioBps`), mas mantida como defesa em profundidade contra o
+    /// parâmetro de `execute` divergir do que foi de fato proposto.
     function executeSetTaxaSecundarioBps(uint256 novaTaxa) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (novaTaxa > TAXA_BPS_MAXIMA) revert TaxaExcedeMaximo(novaTaxa, TAXA_BPS_MAXIMA);
         bytes32 actionId = keccak256(abi.encode("SET_TAXA_SECUNDARIO_BPS", novaTaxa));
         _consumeAction(actionId);
         uint256 taxaAntiga = taxaSecundarioBps;

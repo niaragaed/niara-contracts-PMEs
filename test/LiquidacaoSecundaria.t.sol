@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ParticipacaoToken} from "../src/token/ParticipacaoToken.sol";
 import {ParticipacaoTokenFactory} from "../src/token/ParticipacaoTokenFactory.sol";
 import {EmissaoGateway} from "../src/emissao/EmissaoGateway.sol";
@@ -143,6 +144,105 @@ contract LiquidacaoSecundariaTest is Test {
         vm.prank(agente);
         vm.expectRevert(LiquidacaoSecundaria.PrecoInvalido.selector);
         liquidacao.liquidarCessao(address(token), vendedor, comprador, 10 ether, 0);
+    }
+
+    function test_LiquidarCessao_RevertsForZeroValorAposArredondamento() public {
+        _abrirSecundarioParaComprador();
+        // quantidade e precoPorCota != 0, mas o valor derivado (quantidade * precoPorCota /
+        // UNIDADE_COTA) arredonda para zero — precisa ser barrado à parte de QuantidadeInvalida/
+        // PrecoInvalido, que só cobrem os parâmetros brutos, não o valor derivado.
+        vm.prank(agente);
+        vm.expectRevert(LiquidacaoSecundaria.ValorInvalido.selector);
+        liquidacao.liquidarCessao(address(token), vendedor, comprador, 1, 1);
+    }
+
+    function test_LiquidarCessao_RevertsForVendedorIgualComprador() public {
+        vm.prank(agente);
+        vm.expectRevert(LiquidacaoSecundaria.VendedorIgualComprador.selector);
+        liquidacao.liquidarCessao(address(token), vendedor, vendedor, 10 ether, PRECO_POR_COTA);
+    }
+
+    function test_LiquidarCessao_RevertsForZeroToken() public {
+        vm.prank(agente);
+        vm.expectRevert(LiquidacaoSecundaria.ZeroAddress.selector);
+        liquidacao.liquidarCessao(address(0), vendedor, comprador, 10 ether, PRECO_POR_COTA);
+    }
+
+    function test_LiquidarCessao_RevertsForZeroVendedor() public {
+        vm.prank(agente);
+        vm.expectRevert(LiquidacaoSecundaria.ZeroAddress.selector);
+        liquidacao.liquidarCessao(address(token), address(0), comprador, 10 ether, PRECO_POR_COTA);
+    }
+
+    function test_LiquidarCessao_RevertsForZeroComprador() public {
+        vm.prank(agente);
+        vm.expectRevert(LiquidacaoSecundaria.ZeroAddress.selector);
+        liquidacao.liquidarCessao(address(token), vendedor, address(0), 10 ether, PRECO_POR_COTA);
+    }
+
+    // ── Retorno da taxa cobrada (feeCharged) ────────────────────────────────────────────
+
+    function test_LiquidarCessao_ReturnsTaxaCobrada() public {
+        _abrirSecundarioParaComprador();
+        _setTaxa(50);
+
+        vm.prank(agente);
+        uint256 taxaRetornada = liquidacao.liquidarCessao(address(token), vendedor, comprador, 10 ether, PRECO_POR_COTA);
+
+        assertEq(taxaRetornada, 5 ether); // 0.5% de 1.000 ether
+    }
+
+    function test_LiquidarCessao_ReturnsZeroWhenTaxaDormente() public {
+        _abrirSecundarioParaComprador();
+
+        vm.prank(agente);
+        uint256 taxaRetornada = liquidacao.liquidarCessao(address(token), vendedor, comprador, 10 ether, PRECO_POR_COTA);
+
+        assertEq(taxaRetornada, 0);
+    }
+
+    // ── Pausa de emergência ─────────────────────────────────────────────────────────────
+
+    function test_Pause_OnlyAgente() public {
+        vm.prank(estranho);
+        vm.expectRevert(
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, estranho, agenteRole)
+        );
+        liquidacao.pause();
+    }
+
+    function test_Unpause_OnlyAgente() public {
+        vm.prank(agente);
+        liquidacao.pause();
+
+        vm.prank(estranho);
+        vm.expectRevert(
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, estranho, agenteRole)
+        );
+        liquidacao.unpause();
+    }
+
+    function test_LiquidarCessao_RevertsWhenPaused() public {
+        _abrirSecundarioParaComprador();
+        vm.prank(agente);
+        liquidacao.pause();
+
+        vm.prank(agente);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        liquidacao.liquidarCessao(address(token), vendedor, comprador, 10 ether, PRECO_POR_COTA);
+    }
+
+    function test_LiquidarCessao_SucceedsAfterUnpause() public {
+        _abrirSecundarioParaComprador();
+        vm.prank(agente);
+        liquidacao.pause();
+        vm.prank(agente);
+        liquidacao.unpause();
+
+        vm.prank(agente);
+        liquidacao.liquidarCessao(address(token), vendedor, comprador, 10 ether, PRECO_POR_COTA);
+
+        assertEq(token.balanceOf(comprador), 10 ether);
     }
 
     // ── Gate da política (amarra Fase 3 ↔ Fase 4) ──────────────────────────────────────
@@ -329,6 +429,17 @@ contract LiquidacaoSecundariaTest is Test {
             abi.encodeWithSelector(LiquidacaoSecundaria.TaxaExcedeMaximo.selector, 101, 100)
         );
         liquidacao.proposeSetTaxaSecundarioBps(101);
+    }
+
+    /// @notice Guarda defensiva: `executeSetTaxaSecundarioBps` também rejeita acima do teto,
+    /// mesmo sem propor antes — em profundidade, inalcançável pelo fluxo normal (nunca existe
+    /// proposta pendente para um valor que `propose` já teria rejeitado), mas coberta.
+    function test_ExecuteSetTaxaSecundarioBps_RevertsAboveMaximo_MesmoSemPropose() public {
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(LiquidacaoSecundaria.TaxaExcedeMaximo.selector, 101, 100)
+        );
+        liquidacao.executeSetTaxaSecundarioBps(101);
     }
 
     function test_SetTaxaSecundarioBps_OnlyAdminCanPropose() public {
