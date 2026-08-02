@@ -53,8 +53,9 @@ oferta) e política de transferência plugável (secundário desligado por padr�
   extensível a outras categorias sem reescrever o já existente.
 - **Política de transferência plugável** via `ITransferPolicy`. A Fase 1 entrega
   `DenyAllTransferPolicy` (secundário totalmente desligado). A política sofisticada
-  (lock-up + allowlist + flag de liberação) é Fase 3 — trocável por governança, sem
-  tocar no token.
+  (lock-up + allowlist + flag de liberação) é a `RestrictedTransferPolicy` da Fase 3 —
+  trocável por governança (ver "Decisões travadas — Fase 3" sobre o setter governado
+  que isso exigiu adicionar no token).
 - **Governança com timelock desde o início** (delay mínimo 1h, padrão
   propose→execute, portado de `niara-contracts`). Papéis `AGENTE_ROLE`
   (agente/plataforma, atestador/emissor autorizado) e `EMISSOR_ROLE` (reservado para
@@ -111,6 +112,53 @@ oferta) e política de transferência plugável (secundário desligado por padr�
   `EmissaoGateway` apontado por `gateway`, consultado via `IAccessControl.hasRole` —
   não duplica gestão de papel por clone.
 
+### Decisões travadas — Fase 3 (política de transferência restrita)
+
+- **Desvio do plano original: `ParticipacaoToken` ganhou um setter de política
+  governado.** O plano da Fase 1 previa que a troca de política ficaria só na
+  `transferPolicyPadrao` da factory — mas essa troca só afeta ofertas **futuras**
+  (clones já criados congelam a política vigente no momento em que foram clonados, ver
+  "Arquitetura da Fase 1"). Migrar uma oferta já viva de `DenyAllTransferPolicy` para
+  `RestrictedTransferPolicy` — o próprio ponto da Fase 3 — exige tocar o clone
+  existente. Por isso `ParticipacaoToken.setTransferPolicy(address)` foi adicionado,
+  seguindo o mesmo padrão de autorização único (`onlyGateway`) das demais funções
+  restritas do token (`mint`, `setCotasAutorizadas`, `pause`/`unpause`) — não um
+  `AccessControl` novo no clone. A decisão de *quando* trocar é sensível (mesma
+  categoria de trocar a implementação na factory), então fica atrás de timelock em
+  `EmissaoGateway.proposeSetTransferPolicy`/`executeSetTransferPolicy`
+  (`DEFAULT_ADMIN_ROLE`, mesmo padrão de `SET_IMPLEMENTACAO`/
+  `SET_TRANSFER_POLICY_PADRAO`), não `AGENTE_ROLE` — o token só expõe o setter cru ao
+  `gateway`.
+- **`RestrictedTransferPolicy` é compartilhada, não clonada** — a assinatura de
+  `ITransferPolicy.canTransfer(token, from, to, amount)` já recebe o endereço do token,
+  então uma única instância serve qualquer número de ofertas, com todo o estado (lock-up,
+  allowlist, flag mestre) keyed por `token`. Menos contratos para implantar/verificar do
+  que um clone por oferta.
+- **Tabela-verdade de `canTransfer`**, nesta ordem, todas necessárias: (1)
+  `secundarioLiberado[token]` (flag mestre, default `false`); (2)
+  `block.timestamp >= lockupAte[token]` (carência); (3) `elegivel[token][to]`
+  (allowlist do destinatário). O `from` não entra na checagem — quem já detém o token é
+  titular por construção (só chegou lá via mint), então a exigência da CVM 88 de
+  "comprador é investidor ativo" recai só sobre `to`.
+- **Separação timelock × operacional idêntica ao padrão das fases anteriores**:
+  `definirElegivel`/`definirLockup` são operacionais (`AGENTE_ROLE`, imediato —
+  onboarding ágil); `setSecundarioLiberado` é a única alavanca atrás de timelock nesta
+  política, porque é a decisão que de fato abre negociação secundária. Ver tabela
+  completa em "Arquitetura da Fase 3".
+- **`definirLockup` é set-once via flag dedicada (`lockupDefinido[token]`), não
+  sentinela em `lockupAte == 0`.** Um lock-up de `0` segundos ("sem carência") é uma
+  configuração legítima — se o "já definido" fosse inferido do próprio valor ser
+  diferente de zero, definir lock-up `0` deixaria o campo permanentemente redefinível,
+  quebrando a garantia de "prazo gravado na oferta, para valer". A flag separada evita
+  essa ambiguidade.
+- **Honestidade regulatória**: `setSecundarioLiberado(token, true)` é a alavanca
+  on-chain, mas ligá-la de verdade depende de duas condições que o contrato não
+  verifica e não pode verificar — o lock-up já ter decorrido (isso sim é checado on-chain,
+  em `canTransfer`) **e** a autorização de negócio/jurídica da plataforma para abrir
+  aquele secundário (isso é inteiramente externo ao código, uma decisão de governança
+  que antecede a chamada). Nenhuma automação deve descrever `setSecundarioLiberado`
+  como, sozinho, uma aprovação regulatória.
+
 ---
 
 ## Linhagem (o que veio de `niara-contracts`)
@@ -161,8 +209,12 @@ era implantado uma vez por ativo.
   `EmissaoGateway` (mint escopado por captação) + testes unitários e de invariante de
   dinheiro/reentrância. Ver "Arquitetura da Fase 2" e "Resultados de teste (Fase 2)"
   abaixo.
-- **Fase 3** (futura) — política de transferência sofisticada (lock-up + allowlist +
-  flag de liberação de secundário), trocável por governança.
+- **Fase 3** (concluída) — política de transferência sofisticada:
+  `RestrictedTransferPolicy` (lock-up + allowlist + flag de liberação de secundário) +
+  setter de política governado em `ParticipacaoToken` (desvio do plano original, ver
+  "Decisões travadas — Fase 3") + extensão de `EmissaoGateway` (troca de política via
+  timelock) + testes unitários e de invariante da tabela-verdade. Ver "Arquitetura da
+  Fase 3" e "Resultados de teste (Fase 3)" abaixo.
 - **Fase 4** (futura) — categorias adicionais (dívida/recebível).
 - **Fase 5** (futura) — a definir; possivelmente integração com o site (`niara-PMEs`)
   e/ou modelo de receita.
@@ -265,6 +317,46 @@ completa: `EmissaoGateway`, `ParticipacaoTokenFactory`, `RegistroInvestidorQuali
 e `OfertaCaptacaoFactory` — cada um com seu próprio `TimelockedAccessControl` (mesmo
 padrão da Fase 1, estendido). `OfertaCaptacao` (clone) não tem papel próprio: seu
 `cancelar` reaproveita o `AGENTE_ROLE` do `EmissaoGateway` via `hasRole`.
+
+---
+
+## Arquitetura da Fase 3
+
+```
+RestrictedTransferPolicy (TimelockedAccessControl, ITransferPolicy)
+  ├─ AGENTE_ROLE — definirElegivel(token, investidor, bool) [imediato]
+  │              — definirLockup(token, lockupAte) [imediato, set-once por token]
+  ├─ DEFAULT_ADMIN_ROLE (timelock) — proposeSetSecundarioLiberado/executeSetSecundarioLiberado
+  └─ canTransfer(token, from, to, amount):
+       secundarioLiberado[token] && block.timestamp >= lockupAte[token] && elegivel[token][to]
+
+ParticipacaoToken — ESTENDIDO na Fase 3
+  └─ setTransferPolicy(novaPolitica) [onlyGateway] — troca transferPolicy de um clone já vivo
+
+EmissaoGateway (TimelockedAccessControl) — ESTENDIDO na Fase 3
+  └─ proposeSetTransferPolicy/executeSetTransferPolicy(token, novaPolitica)
+     [DEFAULT_ADMIN_ROLE, timelock] → chama token.setTransferPolicy(novaPolitica)
+```
+
+Uma única `RestrictedTransferPolicy` serve qualquer número de ofertas — todo o estado
+(lock-up, allowlist, flag mestre) é keyed por `token`, aproveitando que
+`ITransferPolicy.canTransfer` já recebe o endereço do token na assinatura (ver
+"Decisões travadas — Fase 3"). `from` nunca é checado: quem detém o token é titular por
+construção (só mint concede saldo), então a exigência de "comprador é investidor ativo"
+da CVM 88 recai só sobre `to`.
+
+### Separação timelock × operacional (Fase 3)
+
+| Ação | Categoria |
+|---|---|
+| `definirElegivel`, `definirLockup` | Operacional (AGENTE, imediato — onboarding ágil) |
+| `setSecundarioLiberado` (a alavanca que de fato abre negociação) | Timelock (1h, propose→execute, `DEFAULT_ADMIN_ROLE`) |
+| `setTransferPolicy` do token (trocar a política de uma oferta já viva) | Timelock (1h, propose→execute, via `EmissaoGateway`, `DEFAULT_ADMIN_ROLE`) |
+
+Apontar um token para a `RestrictedTransferPolicy` antes de configurar lock-up/allowlist
+é seguro: enquanto `secundarioLiberado[token] == false` (o default), `canTransfer`
+continua negando tudo — a mesma garantia de "estado inicial travado" que
+`DenyAllTransferPolicy` dava, só que agora reversível por governança em vez de fixa.
 
 ---
 
@@ -376,6 +468,61 @@ padrão da Fase 1, estendido). `OfertaCaptacao` (clone) não tem papel próprio:
 
 ---
 
+## Resultados de teste (Fase 3)
+
+- `forge build`: sem erros (mesma suíte da Fase 1 + Fase 2 + Fase 3).
+- `forge test`: **220/220 passando** — 196 unitários + 24 invariantes (6 da Fase 1 + 12
+  da Fase 2 + 6 novos da Fase 3), sem nenhuma regressão nas suítes das Fases 1/2 após
+  estender `ParticipacaoToken`/`EmissaoGateway`. Contribuição da Fase 3: 19 testes em
+  `test/RestrictedTransferPolicy.t.sol` (tabela-verdade, acesso, set-once, isolamento
+  por token) + 3 em `test/RestrictedTransferPolicyIntegration.t.sol` (mint/resgate
+  continuam funcionando com a Restricted anexada + ciclo completo de abertura) + 4 novos
+  em `test/ParticipacaoToken.t.sol` (`setTransferPolicy`) + 6 novos em
+  `test/EmissaoGateway.t.sol` (`proposeSetTransferPolicy`/`executeSetTransferPolicy`) +
+  6 invariantes novas em `test/InvariantPolitica.t.sol`.
+- `forge coverage` nos contratos principais da Fase 3 (`RestrictedTransferPolicy`, e as
+  extensões de `ParticipacaoToken`/`EmissaoGateway`) — **100%
+  linha/statement/branch/função**, mesma barra das Fases 1/2. `DenyAllTransferPolicy`
+  mantém a mesma limitação conhecida do instrumentador (não é lacuna real, ver
+  "Resultados de teste (Fase 1)"). Scripts de deploy/demo ficam em 0% de propósito.
+- Invariantes da política restrita (`forge test --match-contract InvariantPoliticaTest`),
+  mesma escala configurada (`runs=256 * depth=100` = 25.600 chamadas por invariante),
+  **zero violações**, ~5,5% das chamadas revertendo de propósito (`tentarLockupDuplicado`
+  — a única ação "caótica" desta suíte, já que a maior parte das demais ações não tem
+  um caminho inválido natural a explorar além do que já é coberto por
+  `NoUnauthorizedOperationalCallEverSucceeded`/`NoUnauthorizedSecundarioToggleEverSucceeded`).
+  As 6 invariantes verificadas:
+  1. Nenhuma transferência titular→titular teve um resultado (sucesso/revert)
+     diferente do previsto pela tabela-verdade
+     (`secundarioLiberado && !lockup && elegivel[to]`) — a prova central da Fase 3.
+  2. `gateway.emitir` (mint, dentro do teto atestado) nunca falhou por causa do estado
+     da `RestrictedTransferPolicy` anexada — mint nunca consulta a política (ver
+     `ParticipacaoToken._update`, `from == address(0)`).
+  3. Nenhuma chamada sem `AGENTE_ROLE` a `definirElegivel`/`definirLockup` jamais teve
+     sucesso.
+  4. Nenhuma chamada sem `DEFAULT_ADMIN_ROLE` a `proposeSetSecundarioLiberado` jamais
+     teve sucesso.
+  5. Nenhum segundo `definirLockup` no mesmo token jamais teve sucesso ("set-once").
+  6. Nenhum vazamento de estado entre tokens: o espelho mantido pelo handler
+     (`ghost_*Esperado`, atualizado a cada escrita bem-sucedida) bate com os getters
+     reais da política para todo token e todo investidor rastreado, em toda chamada da
+     sequência — prova de isolamento por token "de graça", já que uma escrita vazando
+     de `tokenA` para `tokenB` divergiria o espelho de `tokenB`.
+- `script/DemoFase3.s.sol` foi validado de duas formas, mesmo padrão dos scripts
+  anteriores:
+  - **Dry-run**: mostra os 4 passos em sequência — (1) secundário desligado
+    (`DenyAllTransferPolicy`): transferência reverte; (2) token já aponta para a
+    `RestrictedTransferPolicy`, mas ainda travado (`secundarioLiberado == false`,
+    dentro do lock-up): transferência continua revertendo, provando que "apontar cedo
+    é seguro"; (3) secundário liberado e após o lock-up, mas destinatário fora da
+    allowlist: reverte; (4) secundário liberado, após o lock-up, destinatário
+    elegível: passa. Log final mostra saldos e o estado completo da política.
+  - **Broadcast contra `anvil` local**: falha, de propósito, no mesmo ponto que
+    `DeployFase1`/`DeployFase2` — `executeGrantRole` com `TimelockNotElapsed`.
+    Comportamento esperado, não é bug.
+
+---
+
 ## Regras inegociáveis
 
 ### Honestidade / regulatório
@@ -390,6 +537,10 @@ padrão da Fase 1, estendido). `OfertaCaptacao` (clone) não tem papel próprio:
 - O teto por investidor de `OfertaCaptacao` é só o limite daquela oferta — o teto ANUAL
   CRUZADO ENTRE PLATAFORMAS da Resolução CVM 88 é OFF-CHAIN/AUTO-DECLARATÓRIO. Nunca
   descrever o teto on-chain como cumprindo, sozinho, essa exigência agregada.
+- `RestrictedTransferPolicy.setSecundarioLiberado` liga a flag que abre negociação
+  secundária, mas ligá-la de verdade depende do lock-up ter decorrido (checado
+  on-chain) **e** de autorização de negócio/jurídica da plataforma (inteiramente fora
+  do código). Nunca descrever essa chamada, sozinha, como uma aprovação regulatória.
 
 ### Git / GitHub
 - Commits em português, prefixo `feat:`/`fix:`/`refactor:`/`chore:`/`docs:`/`test:`.
@@ -425,7 +576,7 @@ padrão da Fase 1, estendido). `OfertaCaptacao` (clone) não tem papel próprio:
 forge build
 forge test -vv
 forge coverage
-forge test --match-contract Invariant -vv   # roda InvariantTest (Fase 1) e InvariantCaptacaoTest (Fase 2)
+forge test --match-contract Invariant -vv   # roda InvariantTest (Fase 1), InvariantCaptacaoTest (Fase 2) e InvariantPoliticaTest (Fase 3)
 ```
 
 ## Convenções
@@ -460,8 +611,9 @@ forge test --match-contract Invariant -vv   # roda InvariantTest (Fase 1) e Inva
   timelocked para trocá-lo nesta fase (só `implementacao` e `transferPolicyPadrao`
   são trocáveis). Se uma fase futura precisar substituir o `EmissaoGateway`, isso
   exigirá adicionar esse setter então.
-- Nenhum deploy em Sepolia foi feito ainda. `script/DeployFase1.s.sol` e
-  `script/DeployFase2.s.sol` só rodam local (`anvil`) ou em dry-run.
+- Nenhum deploy em Sepolia foi feito ainda. `script/DeployFase1.s.sol`,
+  `script/DeployFase2.s.sol` e `script/DemoFase3.s.sol` só rodam local (`anvil`) ou em
+  dry-run.
 - Nenhuma auditoria externa foi feita. Não descrever este código como auditado em
   nenhuma documentação futura.
 - `OfertaCaptacaoFactory.gateway`/`registro`/`moeda` são fixados na construção
