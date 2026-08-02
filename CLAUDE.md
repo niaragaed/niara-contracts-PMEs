@@ -178,15 +178,15 @@ transferência da Fase 3. Continua não sendo o desenho da exchange.
   exchange.** `LiquidacaoSecundaria` nunca mantém saldo de `MockBRL` nem de cotas; toda
   cessão move fundos diretamente entre `vendedor`/`comprador`/`protocoloWallet` via
   `transferFrom`, atomicamente. Mesmo padrão three-party (comprador/vendedor/protocolo)
-  do `NiaraSettlement`. **Referência conferida contra `NiaraSettlement.t.sol`** — o
-  arquivo de origem em si (`niara-contracts`) continua inacessível nesta linha de
-  sessões (não está no disco, não é público no GitHub, sem `gh` CLI/credenciais no
-  ambiente), mas as propriedades do seu comportamento, extraídas de
-  `NiaraSettlement.t.sol`, foram fornecidas na instrução e conferidas item a item contra
-  `LiquidacaoSecundaria` — ver "Conferência contra `NiaraSettlement.t.sol`" logo abaixo
-  para o resultado completo. Se uma sessão futura tiver acesso ao arquivo de verdade,
-  ainda vale conferir contra o original (a conferência feita aqui foi contra o
-  comportamento reportado, não contra o código-fonte em si).
+  do `NiaraSettlement`. **Conferido contra o código-fonte `NiaraSettlement.sol`** — em
+  duas rodadas: primeiro contra as propriedades extraídas de `NiaraSettlement.t.sol`
+  (testes), depois contra um trecho do próprio `settle` (a guarda anti-evasão de taxa,
+  ver abaixo) — ver "Conferência contra `NiaraSettlement`" logo abaixo para o resultado
+  completo, incluindo a confirmação de `SafeERC20` em todas as pernas e da ordem das
+  transferências. `niara-contracts` como repositório completo (clone local, checkout)
+  continua fora de alcance neste ambiente, mas o código relevante de `NiaraSettlement`
+  já foi conferido trecho a trecho ao longo das sessões desta fase — não há mais
+  pendência de "arquivo não lido" em aberto.
 - **O token continua sendo a única fonte de verdade da elegibilidade.** Quando
   `liquidarCessao` chama `IERC20(token).transferFrom(vendedor, comprador, quantidade)`,
   o `_update` do `ParticipacaoToken` já consulta a `RestrictedTransferPolicy` vigente com
@@ -225,25 +225,40 @@ transferência da Fase 3. Continua não sendo o desenho da exchange.
   `ParticipacaoTokenFactory` apontada na construção — evita liquidar cessões sobre um
   endereço arbitrário que não seja sequer um `ParticipacaoToken` desta plataforma.
 
-### Conferência contra `NiaraSettlement.t.sol`
+### Conferência contra `NiaraSettlement`
 
-Após a implementação inicial da Fase 4, o comportamento de `NiaraSettlement` (extraído de
-`NiaraSettlement.t.sol` e fornecido na instrução) foi conferido item a item contra
-`LiquidacaoSecundaria`. Resultado:
+Em duas rodadas, o comportamento de `NiaraSettlement` foi conferido item a item contra
+`LiquidacaoSecundaria`: primeiro contra as propriedades extraídas de
+`NiaraSettlement.t.sol` (testes), depois contra um trecho do código-fonte do próprio
+`settle` (a guarda anti-evasão de taxa). Resultado:
 
 | Propriedade | Situação antes | O que mudou |
 |---|---|---|
 | Troca atômica por `allowance`, sem custódia | Já conforme (desde a implementação inicial) | — |
+| `SafeERC20.safeTransferFrom` nas três pernas (pagamento ao vendedor, taxa ao protocolo, cota ao comprador) | Já conforme (`using SafeERC20 for IERC20` cobre `moeda` e `token`) | Confirmado, nenhuma mudança necessária |
 | Taxa com teto rígido via timelock | Já conforme (`TAXA_BPS_MAXIMA = 100`, `propose`/`execute`) | — |
 | Reentrância bloqueada (lado do pagamento) | Já conforme (`nonReentrant`, testado com `ReentrantMockBRL`) | — |
 | `BuyerEqualsSeller` | Ausente | Adicionado: `VendedorIgualComprador()`, checado antes de qualquer outra validação |
 | `ZeroAmount` (quantidade) | Já conforme (`QuantidadeInvalida`) | — |
 | `ZeroAmount` (valor de pagamento) | Ausente (gap real: `quantidade`/`precoPorCota` != 0 não impedia o `valor` derivado arredondar para `0` por divisão inteira) | Adicionado: `ValorInvalido()`, checado após calcular `valor` |
+| **Anti-evasão por fracionamento** (`PaymentAmountTooSmallForFeePrecision` na referência) | Ausente (gap real: com taxa ativa, um `valor` pequeno o bastante fazia `taxa` truncar a `0` por divisão inteira — fracionar uma cessão grande em muitas minúsculas escaparia da taxa) | Adicionado: `ValorInsuficienteParaPrecisaoDaTaxa()`, `if (taxaSecundarioBps > 0 && taxa == 0) revert ...`, logo após calcular `taxa`. Inócuo com a taxa dormente (`0`), mas fecha a brecha antes dela ser ativada |
 | `ZeroAddress` (token/comprador/vendedor) | Ausente em `liquidarCessao` (só existia no construtor/setters) | Adicionado: reaproveita o `ZeroAddress()` já existente, checado primeiro na função |
 | `Pausable` com papel de pausa | Ausente | Adicionado: `pause()`/`unpause()` — **decisão deliberada**: reaproveita `AGENTE_ROLE` (mesmo papel operacional único usado para pausa em `ParticipacaoTokenFactory`/`OfertaCaptacaoFactory`), não um `PAUSER_ROLE` novo como na referência — este repositório nunca fragmentou pausa em um papel à parte, e criar um agora só para este contrato quebraria essa consistência sem necessidade |
 | Reentrância pelo lado do ATIVO | Não aplicável — ver justificativa abaixo | Documentado em vez de forçado um teste artificial |
 | `settle` retorna a taxa cobrada | Ausente (`liquidarCessao` não retornava nada) | Adicionado: `returns (uint256 taxa)` |
 | Guarda de teto repetida no `execute` | Ausente (`executeSetTaxaSecundarioBps` só confiava na validação do `propose`) | Adicionado: mesma checagem de `TAXA_BPS_MAXIMA` repetida no `execute`, coberta por teste que chama `execute` diretamente sem `propose` |
+| Ordem das transferências (ativo → pagamento → taxa na referência) | `LiquidacaoSecundaria` faz pagamento → taxa → ativo, ordem invertida | **Divergência deliberada, documentada em vez de alterada** — ver abaixo |
+
+**Ordem das transferências — por que a divergência foi mantida**: no `NiaraSettlement` a
+ordem é ativo primeiro, pagamento depois. Em `LiquidacaoSecundaria` é o inverso: as duas
+pernas de `MockBRL` primeiro, o `transferFrom` do token por último. Sendo tudo atômico
+(`nonReentrant`, um único `liquidarCessao`), a ordem não muda o resultado final em caso de
+sucesso ou revert — mas manter o `transferFrom` do TOKEN como a última chamada reforça, no
+próprio código, o tema já documentado no NatSpec do contrato: o pre-flight de
+`canTransfer` serve só para reverter cedo com um erro claro; a checagem que de fato
+autoriza a cessão é o `_update` do token, disparado por essa última chamada — ela fica
+posicionada como o gate final da sequência, não uma perna qualquer no meio. Comentado
+inline no código (`liquidarCessao`).
 
 **Reentrância pelo lado do ativo — por que não se aplica aqui**: no `NiaraSettlement` o
 ativo negociado é um ERC-20 arbitrário (qualquer par pode ser listado na exchange), então
@@ -298,14 +313,17 @@ copiada literalmente, mas os seguintes padrões foram estudados e adaptados:
   `mint` público irrestrito, rotulado como mock em NatSpec).
 - **`NiaraSettlement.sol`** → padrão adaptado para `src/secundario/LiquidacaoSecundaria.sol`
   (Fase 4): liquidação atômica three-party (comprador/vendedor/protocolo) operando por
-  `allowance`, sem custodiar fundos, com taxa de teto rígido de 100 bps. O arquivo-fonte
-  em si nunca esteve acessível nas sessões em que a Fase 4 foi implementada e depois
-  conferida (não está no disco, não é público no GitHub, sem `gh` CLI/credenciais no
-  ambiente) — a implementação inicial partiu da descrição funcional do padrão, e a
-  conferência posterior partiu das propriedades de `NiaraSettlement.t.sol` fornecidas na
-  instrução, não de leitura direta do código-fonte. Ver "Conferência contra
-  `NiaraSettlement.t.sol`" (dentro de "Decisões travadas — Fase 4") para o resultado
-  item a item.
+  `allowance`, sem custodiar fundos, `SafeERC20` nas três pernas, taxa de teto rígido de
+  100 bps e a mesma guarda anti-evasão por fracionamento
+  (`PaymentAmountTooSmallForFeePrecision` na referência,
+  `ValorInsuficienteParaPrecisaoDaTaxa` aqui). O repositório `niara-contracts` completo
+  nunca esteve acessível nas sessões em que a Fase 4 foi implementada e conferida (não
+  está no disco, não é público no GitHub, sem `gh` CLI/credenciais no ambiente) — a
+  implementação partiu da descrição funcional do padrão e a conferência, em duas
+  rodadas, das propriedades de `NiaraSettlement.t.sol` e depois de um trecho do
+  código-fonte de `settle` fornecidos na instrução. Ver "Conferência contra
+  `NiaraSettlement`" (dentro de "Decisões travadas — Fase 4") para o resultado item a
+  item.
 
 O que **não** veio da exchange (específico deste repositório): factory com clones
 EIP-1167, `ITransferPolicy` plugável, e o modelo de "cotas autorizadas" em vez de
@@ -695,25 +713,25 @@ independentes** para operação completa da plataforma (primário + secundário)
 ## Resultados de teste (Fase 4)
 
 - `forge build`: sem erros (mesma suíte da Fase 1 + Fase 2 + Fase 3 + Fase 4).
-- `forge test`: **263/263 passando** — 233 unitários + 30 invariantes (6 da Fase 1 + 12
+- `forge test`: **266/266 passando** — 236 unitários + 30 invariantes (6 da Fase 1 + 12
   da Fase 2 + 6 da Fase 3 + 6 da Fase 4), sem nenhuma regressão nas suítes anteriores.
   Contribuição da Fase 4 original: 24 testes em `test/LiquidacaoSecundaria.t.sol` +
   1 em `test/LiquidacaoSecundariaReentrancy.t.sol` + 6 invariantes em
-  `test/InvariantSecundario.t.sol`. Contribuição da conferência posterior contra
-  `NiaraSettlement.t.sol` (ver "Decisões travadas — Fase 4"): **+12 testes** em
-  `test/LiquidacaoSecundaria.t.sol` — um revert por guarda nova
-  (`VendedorIgualComprador`, `ValorInvalido`, `ZeroAddress` em `token`/`vendedor`/
-  `comprador`), dois para o retorno de `taxa`, quatro para `pause`/`unpause`
-  (só-AGENTE, bloqueia `liquidarCessao`, restaura após `unpause`), e um para a guarda
-  defensiva de teto repetida em `executeSetTaxaSecundarioBps` chamada diretamente sem
-  `propose`.
+  `test/InvariantSecundario.t.sol`. Duas rodadas de conferência contra `NiaraSettlement`
+  depois (ver "Decisões travadas — Fase 4"): **+12 testes** contra as propriedades de
+  `NiaraSettlement.t.sol` (um revert por guarda nova — `VendedorIgualComprador`,
+  `ValorInvalido`, `ZeroAddress` em `token`/`vendedor`/`comprador` —, dois para o
+  retorno de `taxa`, quatro para `pause`/`unpause`, um para a guarda defensiva de teto
+  no `execute` chamado sem `propose`) e **+3 testes** contra o trecho de código-fonte de
+  `settle` (a guarda anti-evasão: reverte quando a taxa trunca a zero, passa quando o
+  valor é suficiente, e confirma que a guarda não dispara com a taxa dormente).
 - `forge coverage` nos contratos principais da Fase 4 (`LiquidacaoSecundaria`, e as
   pequenas extensões de `IParticipacaoToken`/nova `IParticipacaoTokenFactory`) — **100%
-  linha/statement/branch/função**, mesma barra das fases anteriores. As novas guardas
-  elevaram `LiquidacaoSecundaria` de 44/44 para 52/52 linhas e de 8/8 para 12/12
-  branches, todas cobertas.  `DenyAllTransferPolicy` mantém a mesma limitação conhecida
-  do instrumentador (não é lacuna real, ver "Resultados de teste (Fase 1)"). Scripts de
-  deploy/demo ficam em 0% de propósito.
+  linha/statement/branch/função**, mesma barra das fases anteriores. As guardas
+  acumuladas nas duas rodadas de conferência elevaram `LiquidacaoSecundaria` de 44/44
+  para 53/53 linhas e de 8/8 para 13/13 branches, todas cobertas. `DenyAllTransferPolicy`
+  mantém a mesma limitação conhecida do instrumentador (não é lacuna real, ver
+  "Resultados de teste (Fase 1)"). Scripts de deploy/demo ficam em 0% de propósito.
 - Teste de reentrância dedicado (`test/LiquidacaoSecundariaReentrancy.t.sol`), mesmo
   padrão de `OfertaCaptacaoReentrancy.t.sol` (Fase 2): `ReentrantMockBRL` tenta reentrar
   `liquidarCessao` a partir do próprio `transferFrom` — bloqueada pelo `nonReentrant`, e
@@ -888,10 +906,10 @@ forge test --match-contract Invariant -vv   # roda InvariantTest (Fase 1), Invar
   (desligar `secundarioLiberado` via timelock, o que leva 1h) ou por não conceder mais
   `AGENTE_ROLE` a ninguém capaz de chamar `liquidarCessao` — não implementado como um
   botão único nesta fase.
-- `niara-contracts` (a exchange) nunca esteve acessível localmente nem via GitHub em
-  nenhuma sessão até agora (ver "Decisões travadas — Fase 4" e "Linhagem"). A Fase 4 foi
-  implementada a partir da descrição funcional do `NiaraSettlement` e, depois, conferida
-  item a item contra as propriedades de `NiaraSettlement.t.sol` fornecidas na instrução
-  (ver "Conferência contra `NiaraSettlement.t.sol`") — mas isso ainda não é leitura
-  direta do código-fonte original. Vale uma conferência final contra o arquivo de
-  verdade assim que houver acesso.
+- `niara-contracts` (a exchange) como repositório completo (clone local, checkout)
+  nunca esteve acessível nesta linha de sessões (não está no disco, não é público no
+  GitHub, sem `gh` CLI/credenciais no ambiente) — mas isso não ficou como pendência
+  aberta: `LiquidacaoSecundaria` foi conferida item a item contra `NiaraSettlement`,
+  primeiro via as propriedades de `NiaraSettlement.t.sol`, depois via um trecho do
+  próprio `settle` (a guarda anti-evasão de taxa), ambos fornecidos na instrução — ver
+  "Conferência contra `NiaraSettlement`" em "Decisões travadas — Fase 4".
