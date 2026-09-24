@@ -542,6 +542,15 @@ contract OfertaOrquestradorTest is Test {
         uint256 numOfertasAntes = tokenFactory.numOfertas();
         uint256 numCaptacoesAntes = captacaoFactory.numCaptacoes();
 
+        // `Clones.clone` usa CREATE simples (não CREATE2) — o endereço que TERIA sido criado nas
+        // subchamadas 1 e 3 é previsível a partir do nonce atual de cada factory, mesmo com a
+        // chamada revertendo antes do fim. Prever os dois endereços aqui permite checar depois,
+        // de forma pontual (não só por contagem agregada), que nenhum dos dois foi parar no
+        // registro (`isOferta`/`isCaptacao`) da respectiva factory.
+        address tokenPrevisto = vm.computeCreateAddress(address(tokenFactory), vm.getNonce(address(tokenFactory)));
+        address ofertaPrevista =
+            vm.computeCreateAddress(address(captacaoFactory), vm.getNonce(address(captacaoFactory)));
+
         vm.prank(emissor1);
         vm.expectRevert(MockEmissaoGatewayRevertaEmRegistrar.FalhaForcadaParaTeste.selector);
         orqAtomico.criarOfertaCompleta(
@@ -554,6 +563,12 @@ contract OfertaOrquestradorTest is Test {
         assertEq(captacaoFactory.numCaptacoes(), numCaptacoesAntes);
         assertEq(orqAtomico.numOfertasDoEmissor(emissor1), 0);
         assertEq(orqAtomico.ultimaOfertaDoEmissor(emissor1), address(0));
+
+        // Reforço pontual: nem o endereço que o clone do token TERIA tido, nem o da captação,
+        // aparecem registrados nas respectivas factories — não é só a contagem agregada que
+        // ficou inalterada, o endereço específico nunca foi gravado em `isOferta`/`isCaptacao`.
+        assertFalse(tokenFactory.isOferta(tokenPrevisto));
+        assertFalse(captacaoFactory.isCaptacao(ofertaPrevista));
     }
 
     // ── Pausa ───────────────────────────────────────────────────────────────────────────────
