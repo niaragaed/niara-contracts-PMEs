@@ -115,3 +115,214 @@ Todos os valores acima (`totalSupply`, saldo de cotas de cada investidor, saldo 
 mBRL do emissor, saldo residual do escrow, estado final da oferta) foram lidos
 diretamente da chain via `cast call` — não apenas do console log do script — antes
 deste documento ser escrito.
+
+## Deploy self-service (`OfertaOrquestrador`) — `DeployFase2Sepolia` + `DeployFase2SepoliaExecute`
+
+Fluxo mais novo, separado da demo acima: em vez do AGENTE criar cada oferta manualmente
+(`ParticipacaoTokenFactory.criarOferta` → `atestarCotas` → `criarCaptacao` →
+`registrarCaptacao`), a própria empresa emissora (previamente autorizada) cria a sua oferta
+numa única transação, via `OfertaOrquestrador.criarOfertaCompleta`. Dois scripts, sem
+nenhuma chave privada em variável de ambiente em lugar nenhum — o único signatário de cada
+um é resolvido por `--account` na linha de comando:
+
+1. **`script/DeployFase2Sepolia.s.sol`** — implanta os 8 contratos da Fase 2 +
+   `OfertaOrquestrador`, e PROPÕE (não executa) `AGENTE_ROLE` em 5 relações: o orquestrador
+   em `tokenFactory`/`gateway`/`captacaoFactory`, o admin no próprio orquestrador, e o admin
+   em `RegistroInvestidorQualificado` (pré-requisito de `definirQualificado` — necessário
+   para qualquer investidor que precise aportar acima do `tetoPorInvestidor` de uma oferta;
+   agrupado aqui porque passa pelo mesmo timelock de 1h das outras quatro concessões).
+   Persiste os 9 endereços em `./script/output/fase2-sepolia.json`. Env:
+   `PROTOCOLO_WALLET_ADDRESS`, `TAXA_BPS_ORQUESTRADOR` (obrigatório, 1–100 — ver aviso
+   abaixo), `TETO_POR_INVESTIDOR_ORQUESTRADOR` (obrigatório). Todos sem fallback.
+2. Espera real de >= 1h (o timelock não pode ser pulado em rede real — `vm.warp` não afeta
+   o relógio de uma chain de verdade recebendo transações).
+3. **`script/DeployFase2SepoliaExecute.s.sol`** — lê os 9 endereços do JSON acima (nunca
+   digitados via env, para não arriscar apontar para o contrato errado), executa as 5
+   concessões pendentes, e autoriza o primeiro emissor (`EMISSOR_WALLET_ADDRESS`) a operar
+   o canal self-service. Idempotente: pode ser rodado mais de uma vez sem quebrar.
+4. Depois disso, o **emissor autorizado assina a própria transação** (`cast send
+   <OfertaOrquestrador> "criarOfertaCompleta(...)" ... --account <conta do emissor>`) para
+   criar sua oferta — não passa por nenhum script deste repositório. O mesmo vale para os
+   investidores que aportam nela depois: cada ator assina com a própria carteira, prova de
+   que são partes distintas e sem privilégio uns sobre os outros.
+
+> ⚠️ **`taxaBps` não pode ser `0` neste fluxo, e é gravado imutavelmente por oferta.**
+> `OfertaOrquestrador.taxaBps` (parâmetro de plataforma, trocável via timelock) é copiado
+> para `OfertaCaptacao.taxaBps` no exato momento de `criarOfertaCompleta` — e
+> `OfertaCaptacao.sol` **não tem nenhum setter** para esse campo depois de `initialize()`
+> (conferido no código-fonte: é atribuído uma única vez, em `initialize`, e nunca mais
+> reatribuído). Uma vez criada, uma oferta com `taxaBps` errado **não tem correção
+> possível** — o único remédio é corrigir `OfertaOrquestrador.taxaBps` via
+> `proposeSetTaxaBps`/`executeSetTaxaBps` (o que só afeta ofertas **futuras**) e criar uma
+> oferta nova. Por isso `DeployFase2Sepolia.s.sol` rejeita `TAXA_BPS_ORQUESTRADOR == 0`: com
+> taxa dormente, `OfertaCaptacao.liberarParaEmissor` pula inteiramente a perna de
+> transferência ao protocolo (`if (taxa > 0)`), e o split de receita nunca apareceria no
+> Etherscan — o objetivo desta fase é justamente provar esse split on-chain.
+
+## Resultados — primeira oferta self-service real ("Padaria Silva")
+
+Executado em 2026-09-24. Infraestrutura implantada por `DeployFase2Sepolia.s.sol` +
+`DeployFase2SepoliaExecute.s.sol` (deployer/admin assinando); a oferta em si foi criada e
+operada por carteiras **distintas** do deployer — emissor e investidores assinaram as
+próprias transações, nenhuma delas com qualquer papel privilegiado nos contratos.
+
+### Infraestrutura implantada (endereços de `script/output/fase2-sepolia.json`)
+
+`script/output/fase2-sepolia.json` é gitignored (regenerado a cada deploy, ver "Commit
+local" no `CLAUDE.md`) — os endereços abaixo são a cópia permanente, conferidos linha a
+linha contra `broadcast/DeployFase2Sepolia.s.sol/11155111/run-latest.json`.
+
+| Contrato | Endereço | Etherscan |
+|---|---|---|
+| MockBRL | `0xEC377e00e022675B67Da6ab1966Bc0764bF792A4` | [ver](https://sepolia.etherscan.io/address/0xEC377e00e022675B67Da6ab1966Bc0764bF792A4) |
+| DenyAllTransferPolicy | `0xC763cd522B8D4632ccd1adE698BAD09Be22f6a69` | [ver](https://sepolia.etherscan.io/address/0xC763cd522B8D4632ccd1adE698BAD09Be22f6a69) |
+| ParticipacaoToken (implementação) | `0x367D71E1A578a1Ac061991aCa8f302f9119dB603` | [ver](https://sepolia.etherscan.io/address/0x367D71E1A578a1Ac061991aCa8f302f9119dB603) |
+| EmissaoGateway | `0xeaedcAea403F793AFf6c345a5321c05eE55Cb1FE` | [ver](https://sepolia.etherscan.io/address/0xeaedcAea403F793AFf6c345a5321c05eE55Cb1FE) |
+| ParticipacaoTokenFactory | `0xA116Aeb034633ef58AF68A387778C59f99FE9539` | [ver](https://sepolia.etherscan.io/address/0xA116Aeb034633ef58AF68A387778C59f99FE9539) |
+| RegistroInvestidorQualificado | `0x5BE2cF3f1aeA02987Bea87a635FC9ba7BdF04732` | [ver](https://sepolia.etherscan.io/address/0x5BE2cF3f1aeA02987Bea87a635FC9ba7BdF04732) |
+| OfertaCaptacao (implementação) | `0x46c6690Db2Ad39AF5Fa29581Ed01172a65949656` | [ver](https://sepolia.etherscan.io/address/0x46c6690Db2Ad39AF5Fa29581Ed01172a65949656) |
+| OfertaCaptacaoFactory | `0x5E248656516140360ADEFB66c1095ef0951e45cB` | [ver](https://sepolia.etherscan.io/address/0x5E248656516140360ADEFB66c1095ef0951e45cB) |
+| **OfertaOrquestrador** | `0xde9cC84d1300b57F640f2d1862900393b82796e5` | [ver](https://sepolia.etherscan.io/address/0xde9cC84d1300b57F640f2d1862900393b82796e5) |
+
+`OfertaOrquestrador` foi implantado com `protocoloWallet = 0x9780270d42FD834872C80E57024221A33d3ACd08`,
+`taxaBps = 100` (1%, o teto rígido `TAXA_BPS_MAXIMA`), `tetoPorInvestidor = 20_000 ether`
+(mesmo valor do teto de varejo anual da Res. CVM 88 — coincidência deliberada de parâmetro,
+não uma verificação cruzada real, ver "Limitações" abaixo) e `timelockDelay = 3600`
+segundos (1h — ver nota sobre `TIMELOCK_DELAY` no `CLAUDE.md`).
+
+Carteiras (todas burner, sem valor real):
+
+| Papel | Endereço |
+|---|---|
+| Deployer / admin / agente do orquestrador | `0x9e3d33E905a87FC86A6b84d13176240A22C8FBF8` |
+| Emissor ("Padaria Silva", autorizado via `autorizarEmissor`) | `0x47d9de93F15E1ebfbEFD5F32c0076cf3090C63c6` |
+| Protocolo (recebe a taxa de 1%) | `0x9780270d42FD834872C80E57024221A33d3ACd08` |
+| Investidor 1 (qualificado via `definirQualificado`) | `0x21443ADa1d36e5DCAadD62896Ca2c21aDFE396E1` |
+| Investidor 2 (qualificado via `definirQualificado`) | `0x5a71bA5a602791add4722Aa485b1b68f7BB4ae10` |
+
+### Cronologia — Parte 1: `DeployFase2Sepolia.s.sol` (deploy + propõe 5 papéis)
+
+| # | Ação | Tx hash |
+|---|---|---|
+| 1 | Deploy MockBRL | [`0xc6f273c2…618466`](https://sepolia.etherscan.io/tx/0xc6f273c24d5ab141e3b903b34bfd67e4b18af85901fa497500442d72fd618466) |
+| 2 | Deploy DenyAllTransferPolicy | [`0x7951655b…c3715b`](https://sepolia.etherscan.io/tx/0x7951655b195606c0ac8427d402f5792ec1c05880a218e3402804eaa2d8c3715b) |
+| 3 | Deploy ParticipacaoToken (implementação) | [`0x94956781…3ec478`](https://sepolia.etherscan.io/tx/0x949567812ab42d2daf4349f97fe26aa21fb32c65e560981342031691973ec478) |
+| 4 | Deploy EmissaoGateway | [`0x7248016e…e34657`](https://sepolia.etherscan.io/tx/0x7248016e1525f7706f1c6ab7b8f213d463289a79c08e2eeab9f0271025e34657) |
+| 5 | Deploy ParticipacaoTokenFactory | [`0xd1cff5b5…c9b55e`](https://sepolia.etherscan.io/tx/0xd1cff5b50a893eb99a355fcb0d9541d32064eb2f1862984d191892c11cc9b55e) |
+| 6 | Deploy RegistroInvestidorQualificado | [`0xae2d4133…78057e`](https://sepolia.etherscan.io/tx/0xae2d413354060d0fcbba6adaadfc7c08749a0a5f11a0397684bb47b6bd78057e) |
+| 7 | Deploy OfertaCaptacao (implementação) | [`0x23d40e9f…feb224`](https://sepolia.etherscan.io/tx/0x23d40e9ff77eab27ef8355a5265e145af5d013b94392a0b19033c9f64efeb224) |
+| 8 | Deploy OfertaCaptacaoFactory | [`0xe7c62301…3112ad`](https://sepolia.etherscan.io/tx/0xe7c62301b524e7f462925aba167f7bf46411feb2078e43a7ba91b2087a3112ad) |
+| 9 | Deploy OfertaOrquestrador | [`0x87e4ab0e…e282ed`](https://sepolia.etherscan.io/tx/0x87e4ab0ee73dd189fc311e98cf95a38f20a3488e6139e8d3dd8c932859e282ed) |
+| 10 | `ParticipacaoTokenFactory.proposeGrantRole(AGENTE_ROLE, orquestrador)` | [`0x3508a9b3…741831`](https://sepolia.etherscan.io/tx/0x3508a9b3ad6d3d4d44a3e35836cde929fd429cdff8fdd8d1d710941407741831) |
+| 11 | `EmissaoGateway.proposeGrantRole(AGENTE_ROLE, orquestrador)` | [`0xab2a75cb…d0fa00`](https://sepolia.etherscan.io/tx/0xab2a75cbe4358670bfaa3091b91a9d1fbdd7d1faaa08022cdbf9d0c99bd0fa00) |
+| 12 | `OfertaCaptacaoFactory.proposeGrantRole(AGENTE_ROLE, orquestrador)` | [`0xc77b1b87…50a470`](https://sepolia.etherscan.io/tx/0xc77b1b87b61eb52492d22b94e8b2818fd437cb2b255d12c26e9743da6150a470) |
+| 13 | `OfertaOrquestrador.proposeGrantRole(AGENTE_ROLE, admin)` | [`0x20c93273…ba70c5`](https://sepolia.etherscan.io/tx/0x20c932734bafb5de48a3a11aec7902014aed9eb043637aa4a11d726c13ba70c5) |
+| 14 | `RegistroInvestidorQualificado.proposeGrantRole(AGENTE_ROLE, admin)` | [`0x37df452e…b991cd`](https://sepolia.etherscan.io/tx/0x37df452e02092630d772ca6c3f9943fa41c5be9c6dd223555347aff19fb991cd) |
+
+**Espera real do timelock**: as 5 propostas acima ficaram pendentes por 1h de relógio real
+(mesma mecânica já usada nas fases anteriores — `vm.warp` não existe fora do `forge test`).
+
+### Cronologia — Parte 2: `DeployFase2SepoliaExecute.s.sol` (executa os 5 papéis + autoriza o emissor)
+
+| # | Ação | Tx hash |
+|---|---|---|
+| 1 | `ParticipacaoTokenFactory.executeGrantRole(AGENTE_ROLE, orquestrador)` | [`0x8b7c4bed…a2388a`](https://sepolia.etherscan.io/tx/0x8b7c4bed9ec43b084cdbe59c499486f13fac979bc5f18dd5a72a9e2ab3a2388a) |
+| 2 | `EmissaoGateway.executeGrantRole(AGENTE_ROLE, orquestrador)` | [`0x33a0965f…34bd8f`](https://sepolia.etherscan.io/tx/0x33a0965f35954e3a4b2fef87411bd4fd9268ca1cc69848551b8acbd28634bd8f) |
+| 3 | `OfertaCaptacaoFactory.executeGrantRole(AGENTE_ROLE, orquestrador)` | [`0xe753dc1d…ed1f44`](https://sepolia.etherscan.io/tx/0xe753dc1dc7f5a6013d37624ae322a0109f573da8d52b606e76ea909c01ed1f44) |
+| 4 | `OfertaOrquestrador.executeGrantRole(AGENTE_ROLE, admin)` | [`0x84560fe1…f9a13b`](https://sepolia.etherscan.io/tx/0x84560fe1796c84c81b92a6bb76488667f002bd5971abadc775a175bffef9a13b) |
+| 5 | `RegistroInvestidorQualificado.executeGrantRole(AGENTE_ROLE, admin)` | [`0xf773d86a…edbcaa`](https://sepolia.etherscan.io/tx/0xf773d86af3af5b179b53c5ca6e1619b50f308a4486585d97d642d09b84edbcaa) |
+| 6 | `OfertaOrquestrador.autorizarEmissor(emissor)` | [`0x05686377…99e212`](https://sepolia.etherscan.io/tx/0x056863778275553d47e211d35e54d2b4709cd75d6954bfdd3ff121499099e212) |
+
+### Cronologia — Parte 3: ações assinadas fora dos scripts (emissor e investidores)
+
+Nenhuma das transações abaixo passa por este repositório — cada ator assinou com a própria
+carteira, direto via `cast send`/carteira própria, exatamente como descrito na seção
+anterior. Só as duas transações centrais têm hash registrado aqui; aportes, encerramento e
+resgates foram conferidos por leitura de estado (`cast call`), não listados individualmente.
+
+| Ação | Quem assina | Tx hash |
+|---|---|---|
+| **`OfertaOrquestrador.criarOfertaCompleta(...)`** — cria token PSILVA + oferta "Padaria Silva" numa única transação | emissor (`0x47d9…C63c6`) | [`0xcbe401ab…ded8dd`](https://sepolia.etherscan.io/tx/0xcbe401ab61de636816b8c009e0ecfec389b9b3b35ac11d72b0aaf8e792ded8dd) |
+| `RegistroInvestidorQualificado.definirQualificado` (2x, um por investidor) | admin | não listado — só o efeito (`ehQualificado == true`) foi conferido via `cast call` |
+| `MockBRL.mint` + `.approve` + `OfertaCaptacao.aportar` (2x, um por investidor) | investidor 1, investidor 2 | não listados — só `totalArrecadado` final foi conferido via `cast call` |
+| `OfertaCaptacao.encerrar()` → `EncerradaSucesso` | qualquer conta (permissionless) | não listado — só `estado()` final foi conferido via `cast call` |
+| `OfertaCaptacao.resgatarCotas()` (2x, um por investidor) | investidor 1, investidor 2 | não listados — só `token.balanceOf`/`totalSupply` foram conferidos via `cast call` |
+| **`OfertaCaptacao.liberarParaEmissor()`** — divide a arrecadação entre protocolo e emissor | qualquer conta (permissionless) | [`0xe4efcb14…de4baf`](https://sepolia.etherscan.io/tx/0xe4efcb14198eabfc87ae59e8f99e55099b6e04786f26e40788eed27cc6de4baf) |
+
+Contratos criados em runtime pela transação central (endereços do clone, não implantados
+por nenhum script — vêm de `Clones.clone` dentro de `criarOfertaCompleta`):
+
+| | Endereço | Etherscan |
+|---|---|---|
+| Token (ParticipacaoToken, "PSILVA") | `0x76d8e88fe48Bfab2f2EEd7196321B2886750298D` | [ver](https://sepolia.etherscan.io/address/0x76d8e88fe48Bfab2f2EEd7196321B2886750298D) |
+| Oferta (OfertaCaptacao, escrow "Padaria Silva") | `0x6587265f971Aa555106D64e3422Ee901A0D20546` | [ver](https://sepolia.etherscan.io/address/0x6587265f971Aa555106D64e3422Ee901A0D20546) |
+
+Termos da oferta: meta mínima R$ 500.000, meta máxima R$ 600.000 (lote adicional de exatos
+20% sobre a mínima, dentro do limite de 25% da Res. CVM 88), preço por cota R$ 1.000, prazo
+de 90 dias (dentro do limite de 180 dias).
+
+### Resultados verificados on-chain (`cast call`, não só o log dos scripts)
+
+- `hasRole(AGENTE_ROLE, emissor)` → **`false`** em `ParticipacaoTokenFactory`,
+  `EmissaoGateway` e `OfertaCaptacaoFactory` — o emissor nunca deteve, em nenhum momento, o
+  papel privilegiado que a criação da oferta exige; só o `OfertaOrquestrador` o detém, e
+  atuou em nome do emissor dentro de uma única transação atômica assinada por ele.
+- `totalArrecadado = R$ 600.000` (`metaMaxima` exata) → fechamento antecipado por
+  subscrição cheia, mesmo padrão já visto na demo manual acima.
+- Após `liberarParaEmissor()`: carteira do protocolo com **R$ 6.000** (1% de R$ 600.000,
+  `taxaBps = 100`) e carteira do emissor com **R$ 594.000** (99% restante) — primeira vez,
+  nesta linha de demos, que o split de taxa aparece com um valor diferente de zero
+  on-chain (a demo manual da Fase 2 acima usou `taxaBps = 0` deliberadamente).
+- `token.totalSupply() = 600 ether` (600 cotas na escala de 18 casas), exatamente igual a
+  `cotasAutorizadas()` do token — nenhuma cota "sobrando" nem "faltando" em relação ao
+  atestado pelo `EmissaoGateway` no momento da criação.
+
+## Roteiro de demonstração
+
+Ordem sugerida de links a abrir (todos no Sepolia Etherscan), com o que dizer em cada um:
+
+1. **`OfertaOrquestrador` verificado** (endereço na tabela acima). "Este é o contrato novo:
+   antes, só a plataforma (o AGENTE) podia criar uma oferta, chamando 4 funções em 3
+   contratos diferentes. Agora uma empresa autorizada faz isso sozinha, numa única
+   transação."
+2. **A transação central** (`criarOfertaCompleta`, hash acima). Apontar o campo **From**:
+   é a carteira do emissor, não a do deployer/admin. "Quem assina esta transação é a própria
+   Padaria Silva — o botão 'From' não é a plataforma."
+3. Na aba **"Internal Txns"** dessa mesma transação: mostrar as 4 subchamadas
+   (`criarOferta` → `atestarCotas` → `criarCaptacao` → `registrarCaptacao`) acontecendo
+   dentro da mesma transação — "isso tudo é atômico: se qualquer uma falhasse, nada teria
+   sido criado, nem o token nem a oferta" (ver os dois testes de atomicidade em
+   `test/OfertaOrquestrador.t.sol`, reforçados nesta fase).
+4. **Read Contract** de `ParticipacaoTokenFactory`/`EmissaoGateway`/`OfertaCaptacaoFactory`,
+   chamando `hasRole` com `AGENTE_ROLE` e o endereço do emissor → mostra `false` ao vivo.
+   "O emissor nunca teve esse papel — só o orquestrador teve, e usou em nome dele."
+5. **Token PSILVA** e **oferta "Padaria Silva"** (endereços acima) — ambos reconhecidos pelo
+   Etherscan como proxy (EIP-1167) das mesmas implementações já verificadas na demo manual.
+   "Mesmo código, caminho de criação diferente."
+6. **`liberarParaEmissor()`** (hash acima) → aba **"ERC-20 Token Txns"** ou **"Internal
+   Txns"**: mostrar as duas transferências de `MockBRL` saindo do escrow — R$ 6.000 para a
+   carteira de protocolo, R$ 594.000 para a carteira do emissor. "Esta é a primeira vez que
+   esse split de taxa aparece com valor diferente de zero on-chain — 1%, o teto máximo
+   permitido pelo próprio contrato."
+7. Fechar com `token.totalSupply()` em **Read Contract** = 600 cotas, batendo com
+   `metaMaxima / precoPorCota`.
+
+## Limitações desta demonstração
+
+- **Testnet sem lastro.** Sepolia ETH e `MockBRL` não têm valor real; nenhum valor
+  mobiliário de verdade foi ofertado.
+- **Tetos anuais são off-chain.** Nem o teto de R$ 20 mil/ano do investidor de varejo, nem
+  o teto agregado do emissor entre plataformas (Res. CVM 88), são verificados por este
+  contrato de forma cross-plataforma — `tetoPorInvestidor` é só o limite **desta oferta**,
+  e o `OfertaOrquestrador` documenta em NatSpec, explicitamente, que não tem e não pode ter
+  visibilidade sobre o que um emissor já captou em outra plataforma (ver
+  `src/orquestracao/OfertaOrquestrador.sol`, NatSpec do contrato).
+- **`taxaBps` é imutável por clone.** Uma vez criada, a taxa de uma oferta específica não
+  pode mais ser alterada — só ofertas futuras herdam um `taxaBps` novo (ver aviso acima).
+- **Sem auditoria externa.** Cobertura de testes + fuzzing de invariantes, sem revisão de
+  terceiros.
+- **Os dois investidores foram qualificados manualmente.** `definirQualificado` foi chamado
+  para as duas carteiras de investidor especificamente para permitir aportes acima do teto
+  de R$ 20 mil por investidor não qualificado (`tetoPorInvestidor`) — sem isso, nenhuma das
+  duas conseguiria aportar os R$ 300 mil que aportou. Em produção, qualificação de
+  investidor é um processo regulatório real (Res. CVM 30), não um botão de demonstração.

@@ -357,8 +357,167 @@ era implantado uma vez por ativo.
   de invariante de conservação/atomicidade. Ver "Arquitetura da Fase 4" e "Resultados de
   teste (Fase 4)" abaixo.
 - **Fase 5** (futura) — categorias adicionais (dívida/recebível).
-- **Fase 6** (futura) — a definir; possivelmente integração com o site (`niara-PMEs`)
-  e/ou modelo de receita.
+- **Fase 6** (em andamento) — integração com o site (`niara-PMEs`): o frontend passou a
+  ler/escrever de verdade contra a infraestrutura já implantada em Sepolia (Fase 4), via
+  `script/DemoNiaraPMEsOnChain.s.sol` (ver abaixo) + `src/lib/web3/` naquele repositório.
+  Nenhum contrato novo foi implantado para isso — só uma nova chamada de escrita
+  (`criarOferta`/`atestarCotas`/`criarCaptacao`/`registrarCaptacao`) usando os factories já
+  verificados e o `AGENTE_ROLE` já concedido ao deployer.
+- **`OfertaOrquestrador`** (concluída — implementação e deploy real em Sepolia) — canal
+  self-service aditivo: a própria empresa emissora, previamente autorizada, cria sua oferta
+  (token + captação) numa única transação atômica, sem ganhar poder sobre parâmetros de
+  plataforma. Não substitui nem altera nenhuma fase anterior — é um segundo caminho para o
+  mesmo resultado (a criação manual pelo AGENTE continua funcionando sem mudança). Ver
+  `PLANO_OFERTA_ORQUESTRADOR.md` (desenho) e "`OfertaOrquestrador` — canal self-service"
+  abaixo (deploy real e resultados).
+
+### 🔴 Chave do deployer da Fase 4 perdida — infraestrutura redeployada em 2026-08-15
+
+A chave do deployer original da Fase 4 (`0x101e8ad58F2D2A923553FeFE558a7bEf5566871E`,
+documentada em `DEMO_SECUNDARIO_SEPOLIA.md`) foi perdida (não encontrada em nenhuma
+carteira MetaMask). Como `admin_` desse deployer foi o único endereço a receber
+`DEFAULT_ADMIN_ROLE` em todos os 6 contratos que o exigem (conferido em
+`_deployInfra(admin, protocoloWallet)`, `script/DemoSecundarioSetup.s.sol:74-95` — o mesmo
+`admin` é passado a todos os construtores) e `grantRole`/`revokeRole` padrão estão
+desabilitados (`TimelockedAccessControl.sol:102-110`), não havia caminho on-chain para
+recuperar acesso — os 10 contratos originais da Fase 4 (ver tabela em
+`DEMO_SECUNDARIO_SEPOLIA.md`) ficaram permanentemente órfãos. `DEMO_SECUNDARIO_SEPOLIA.md`
+**não foi apagado** (continua documentando aquele deploy histórico), mas os endereços de
+lá não são mais operáveis — usar sempre os endereços novos abaixo.
+
+`script/DemoSecundarioSetup.s.sol` foi rodado de novo, com uma carteira burner nova
+(`0x0D41059eBde70a46EB5207af0837921594CAFC05`), confirmando os 10 deploys + as 6 propostas
+de `AGENTE_ROLE` on-chain (nonce 0→16, saldo debitado — verificado via `cast`, não só pelo
+log do script). Depois de esperar a 1h real do timelock, `AGENTE_ROLE` foi executado e a
+oferta de demo criada (ver seção seguinte) — tudo lido de volta da chain via `cast call`
+antes de ser considerado confirmado.
+
+| Contrato | Endereço novo (2026-08-15) |
+|---|---|
+| MockBRL | `0xb99dda4e4d89f40324A7831970b8f37dBc35668F` |
+| DenyAllTransferPolicy | `0x28020B9370E140b5a542443a767F2f016b9a461A` |
+| RestrictedTransferPolicy | `0x0Ea184A5A02f2104D250ff7fA2F97d26FcceFb42` |
+| ParticipacaoToken (implementação) | `0xf603fc5dEb042053567ebEB0cEc1CCe646B63346` |
+| EmissaoGateway | `0x3082981ceE0068c0B9d6144edB1B0CEE14931a6E` |
+| ParticipacaoTokenFactory | `0xD12808283E953E975f46799B1Eac0ad88BfbA697` |
+| RegistroInvestidorQualificado | `0xd5608D6FAAAC715eE9edeB2c47fe1f2De86F64F5` |
+| OfertaCaptacao (implementação) | `0x53a7C7F8a5E88DD9db8Ee8109f44aA7BCB08552B` |
+| OfertaCaptacaoFactory | `0x28BE1a83189CA6Bc8A163dC7bf659FAF09621dA7` |
+| LiquidacaoSecundaria | `0x156aa697739eCa43ED0916D58C4913b4863629ac` |
+
+Deployer/admin/agente novo: `0x0D41059eBde70a46EB5207af0837921594CAFC05` — chave privada
+só em `.env` local (gitignored), nunca impressa em log/console/chat.
+
+### `script/DemoNiaraPMEsOnChain.s.sol` (Fase 6 — oferta para o frontend real)
+
+Cria UMA nova oferta de captação por execução, reaproveitando por completo a infra acima
+(nenhum contrato novo) — pensada para ser consumida pelo fluxo real de `/investir/onchain`
+do `niara-PMEs`. Também executa (não só propõe) o `AGENTE_ROLE` pendente nos 3 contratos
+que usa, de forma **idempotente** (`_executarAgente` faz `hasRole` antes de chamar
+`executeGrantRole` — pula se já concedido, em vez de reverter com `ActionNotPending`) —
+substitui, só para este caso, o `DemoSecundarioPreparar.s.sol` original (que também prepara
+vendedor/comprador/lockup do secundário, fora de escopo aqui). Essa idempotência é o que
+permite **rodar o script várias vezes seguidas para criar várias ofertas**, não só uma —
+ver "10 ofertas de reserva" abaixo. Parâmetros pequenos de propósito (`metaMinima=100
+mBRL`, `metaMaxima=200 mBRL`, `precoPorCota=10 mBRL`, `tetoPorInvestidor=200 mBRL` — igual
+à meta máxima, para uma única carteira conseguir fechar a oferta sozinha) — ver NatSpec do
+próprio script para o raciocínio completo, incluindo por que `encerrar()` consegue fechar
+antes do prazo de 180 dias (atingindo `metaMaxima` exatamente).
+
+**Primeira oferta, rodada em 2026-08-15** (`--broadcast`, confirmado via `cast call` contra
+o estado real, não só o log do script) — testada ponta a ponta pela UI de verdade no mesmo
+dia (mint → aportar 2x → encerrar → resgatar), **já encerrada**:
+
+| | Endereço |
+|---|---|
+| Token (ParticipacaoToken da oferta) | `0xAD141F009160789A50C93f116a41635a31EbEE3A` |
+| Oferta (escrow OfertaCaptacao) | `0x8390a7dCD1a379B99b67E3876c1bf200A27C57c6` |
+
+### 10 ofertas de reserva para o Startup Summit (2026-08-15)
+
+Criadas rodando o script 10x em sequência, todas confirmadas `estado=Aberta` via `cast
+call` antes de considerar prontas. Pensadas para uma demo presencial (apresentador guia um
+visitante por vez, troca de oferta entre uma demo e outra pelo seletor da UI — ver
+`niara-PMEs/CLAUDE.md`, "Uma ou várias ofertas") — nenhuma delas foi tocada pela UI ainda,
+todas com `totalArrecadado=0`. Já carregadas em `NEXT_PUBLIC_OFERTAS_ONCHAIN` no
+`.env.local`/deploy do `niara-PMEs`.
+
+| # | Token (ParticipacaoToken) | Oferta (OfertaCaptacao) |
+|---|---|---|
+| 1 | `0x4DDDD5DeF833f9Ad3F6f714661a55fDC0D71d18D` | `0xd4AC69a4c7Bfdc5E85c0e0da76ce12a1552b2704` |
+| 2 | `0x42B054aA3A6b4Eb4fDEd2E81E145C4C30268494b` | `0xcB5B8D945996114F781DD729F229638192d18258` |
+| 3 | `0xdb7c0A4059384b6Dd36354b6897419d968B739be` | `0xDd9a14c221C6d9E2Cf33c56d8A4bF7C8BDfAF938` |
+| 4 | `0x4f92299B02A677b4b9888da16096763c2D60f1d8` | `0x29f10569644871BcD57e442E8802434D963688d9` |
+| 5 | `0xA1a2C9F3877ddAE6eC5dcedE9Cf00c3e4cD1A1F6` | `0xfAa7946221F4a1D66c1B172bed79cF37ca003261` |
+| 6 | `0x2fA50be34DF5C123B4f12B1f12A79C3bc12F4B9D` | `0xa60119428905fDf66BF967DE90A2F892985d99b2` |
+| 7 | `0x076f06668F04cF5Bf7fB33a2aAaFe58e72881DD9` | `0xE4E7c347823f648aBba73B31855E2Fc1D7fE2fb1` |
+| 8 | `0x757534f9A0bfEF76C1f8532a3561670F481dcCc5` | `0x4378E93588603385B1A51b74c06c0a9FCfc66A16` |
+| 9 | `0x944ad3048F9940F53eA68d6546FB7029afe70601` | `0xd720e3E0f53B7BA278A2beE99Da7F0Edd1F14B9c` |
+| 10 | `0x466e066d155724b62e75De340ceF7097D3996176` | `0xaef8C045cAaBe0F283bD92893031F4f2644d534F` |
+
+🔴 Cada uma consome parte do saldo de Sepolia ETH do deployer
+(`0x0D41059eBde70a46EB5207af0837921594CAFC05`, ~0.0025 ETH por oferta) — se o evento exigir
+mais de 10 demonstrações completas, rodar o script de novo (idempotente, sem timelock,
+`AGENTE_ROLE` já ativo) e verificar o saldo antes via `cast balance`.
+
+Estado on-chain conferido: `estado=0` (Aberta), `metaMinima=100 ether`,
+`metaMaxima=200 ether`, `precoPorCota=10 ether`, `tetoPorInvestidor=200 ether`,
+`token.cotasAutorizadas=20 ether` (20 cotas, reescalado certo). Esses 3 endereços (token +
+oferta + `MockBRL` fixo da tabela acima) já estão em `niara-PMEs/.env.local`
+(`NEXT_PUBLIC_MOCKBRL_ADDRESS`/`NEXT_PUBLIC_PARTICIPACAO_TOKEN_ADDRESS`/
+`NEXT_PUBLIC_OFERTA_CAPTACAO_ADDRESS`) — `/investir/onchain` já lê a oferta real.
+
+### `OfertaOrquestrador` — canal self-service (implementação + deploy real em Sepolia)
+
+Contrato aditivo (`src/orquestracao/OfertaOrquestrador.sol`, commit `0216eb0`) que permite a
+própria empresa emissora, previamente autorizada, criar sua oferta (token + captação) numa
+única transação atômica (`criarOfertaCompleta`), sem ganhar poder sobre `cotasAutorizadas`,
+`taxaBps`, `protocoloWallet` ou `tetoPorInvestidor` — ver `PLANO_OFERTA_ORQUESTRADOR.md`
+para o desenho completo e `test/OfertaOrquestrador.t.sol` + `test/InvariantOrquestrador.t.sol`
+para a suíte (43 testes unitários + 6 invariantes de fuzzing stateful, 100% de cobertura
+linha/statement/branch/função no contrato novo). Nenhum contrato existente mudou de
+comportamento.
+
+Deploy real em Sepolia (`script/DeployFase2Sepolia.s.sol` + `script/
+DeployFase2SepoliaExecute.s.sol`, 2026-09-24) e primeira oferta self-service de verdade
+("Padaria Silva", R$ 600.000 captados, taxa de 1% dividida on-chain entre protocolo e
+emissor) — cronologia completa de transações, roteiro de demonstração e limitações em
+`DEMO_SEPOLIA.md`, seção "Resultados — primeira oferta self-service real".
+
+🔴 **`TIMELOCK_DELAY = 1 hora` usado neste deploy é valor de protótipo, não de produção.**
+`TimelockedAccessControl.MIN_TIMELOCK_DELAY` (1h) é o **mínimo** permitido pelo contrato
+(`MAX_TIMELOCK_DELAY` é 30 dias) — o deploy real usou exatamente esse mínimo, escolhido para
+não segurar a demonstração por dias, não porque 1h seja um delay de governança adequado. Um
+deploy de produção deveria usar um delay bem maior (ordem de grandeza recomendada: ~48h),
+para dar tempo real de alguém reagir a uma proposta de troca de papel/parâmetro incorreta ou
+maliciosa antes que ela possa ser executada. Nada no código impede um delay maior — é uma
+escolha de parâmetro no momento do deploy (`timelockDelay_` do construtor), não uma
+limitação do contrato.
+
+🔴 **Gás na Sepolia variou de forma acentuada dentro da MESMA sessão de deploy/demo** —
+de ~1 gwei a dezenas de gwei — com uma única chamada de `aportar` custando ~0.018 ETH numa
+dessas janelas de pico. Qualquer demonstração ao vivo em Sepolia precisa (a) de uma folga de
+saldo bem acima do custo estimado a partir de um gás baixo observado anteriormente, e (b)
+ser preparada com **dias de antecedência**, não na mesma sessão em que vai ser apresentada —
+Sepolia ETH de faucet é limitado, e um pico de gás inesperado pode consumir saldo mais
+rápido do que o planejado no meio de uma demo.
+
+Endereços da infraestrutura implantada para este canal (nova infra de referência —
+**não substitui** a tabela de endereços da Fase 4/Fase 6 acima, que serve o fluxo
+`/investir/onchain` do frontend via AGENTE manual; esta serve o canal self-service do
+emissor):
+
+| Contrato | Endereço |
+|---|---|
+| MockBRL | `0xEC377e00e022675B67Da6ab1966Bc0764bF792A4` |
+| DenyAllTransferPolicy | `0xC763cd522B8D4632ccd1adE698BAD09Be22f6a69` |
+| ParticipacaoToken (implementação) | `0x367D71E1A578a1Ac061991aCa8f302f9119dB603` |
+| EmissaoGateway | `0xeaedcAea403F793AFf6c345a5321c05eE55Cb1FE` |
+| ParticipacaoTokenFactory | `0xA116Aeb034633ef58AF68A387778C59f99FE9539` |
+| RegistroInvestidorQualificado | `0x5BE2cF3f1aeA02987Bea87a635FC9ba7BdF04732` |
+| OfertaCaptacao (implementação) | `0x46c6690Db2Ad39AF5Fa29581Ed01172a65949656` |
+| OfertaCaptacaoFactory | `0x5E248656516140360ADEFB66c1095ef0951e45cB` |
+| OfertaOrquestrador | `0xde9cC84d1300b57F640f2d1862900393b82796e5` |
 
 ---
 
@@ -881,9 +1040,12 @@ forge test --match-contract Invariant -vv   # roda InvariantTest (Fase 1), Invar
   timelocked para trocá-lo nesta fase (só `implementacao` e `transferPolicyPadrao`
   são trocáveis). Se uma fase futura precisar substituir o `EmissaoGateway`, isso
   exigirá adicionar esse setter então.
-- Nenhum deploy em Sepolia foi feito ainda. `script/DeployFase1.s.sol`,
-  `script/DeployFase2.s.sol`, `script/DemoFase3.s.sol` e `script/DemoFase4.s.sol` só
-  rodam local (`anvil`) ou em dry-run.
+- 🔴 Nota desatualizada corrigida nesta revisão: Sepolia já recebeu múltiplos deploys reais
+  (ver `DEMO_SEPOLIA.md`, `DEMO_SECUNDARIO_SEPOLIA.md` e as seções "Fase 6"/
+  "`OfertaOrquestrador`" acima). `script/DeployFase1.s.sol`, `script/DemoFase3.s.sol` e
+  `script/DemoFase4.s.sol` continuam rodando só local (`anvil`) ou em dry-run;
+  `script/DeployFase2.s.sol` foi removido, substituído por `script/DeployFase2Sepolia.s.sol`
+  + `script/DeployFase2SepoliaExecute.s.sol` (que já rodaram de verdade em Sepolia).
 - Nenhuma auditoria externa foi feita. Não descrever este código como auditado em
   nenhuma documentação futura.
 - `OfertaCaptacaoFactory.gateway`/`registro`/`moeda` são fixados na construção
