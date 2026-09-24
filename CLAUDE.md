@@ -1033,9 +1033,21 @@ forge test --match-contract Invariant -vv   # roda InvariantTest (Fase 1), Invar
 
 ## Pendências conhecidas
 
-- `EMISSOR_ROLE` está definido em `EmissaoGateway` mas ainda sem uso funcional em
-  nenhum contrato da Fase 1 — reservado para ações específicas da empresa emissora em
-  fases futuras (ex.: propor a própria oferta).
+- 🔴 Nota atualizada nesta revisão: o self-service de criação de oferta pela própria
+  empresa emissora — o caso de uso para o qual `EMISSOR_ROLE` fora reservado ("propor a
+  própria oferta") — já existe e está em produção real na Sepolia, mas **não** via
+  `EMISSOR_ROLE`. `OfertaOrquestrador.emissoresAutorizados` (allowlist própria do
+  orquestrador, gerida por `autorizarEmissor`/`revogarEmissor`) é quem resolve isso — ver
+  "`OfertaOrquestrador` — canal self-service" acima. `EMISSOR_ROLE` continua definido em
+  `EmissaoGateway`, constante morta, sem nenhum uso funcional em nenhuma fase. A decisão de
+  não reaproveitá-lo foi deliberada, não esquecimento: `EMISSOR_ROLE` é concedido/revogado
+  via `EmissaoGateway.proposeGrantRole`/`executeGrantRole`, herdado de
+  `TimelockedAccessControl` — logo passa pelo timelock de 1h do contrato. Autorizar um
+  emissor a criar a própria oferta precisava ser **imediato** (é só a capacidade de criar a
+  própria oferta com parâmetros fixados pela plataforma, nunca poder sobre fundos de
+  terceiros) — incompatível com o delay do `EMISSOR_ROLE` reaproveitado. A allowlist nova,
+  num contrato novo, resolve o mesmo caso de uso sem essa incompatibilidade (ver
+  `PLANO_OFERTA_ORQUESTRADOR.md`, §1.4, "`EMISSOR_ROLE` do `EmissaoGateway`").
 - `ParticipacaoTokenFactory.gateway` é fixado na construção — não há setter
   timelocked para trocá-lo nesta fase (só `implementacao` e `transferPolicyPadrao`
   são trocáveis). Se uma fase futura precisar substituir o `EmissaoGateway`, isso
