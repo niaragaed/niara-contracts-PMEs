@@ -30,3 +30,7 @@ script/output/
 # IDE
 .vscode/
 .idea/
+
+# Config local do Claude Code (ex.: includeCoAuthoredBy) — por máquina, nunca
+# versionada; ver CLAUDE.md, "Git / GitHub", para o conteúdo exato a recriar.
+/.claude/

@@ -976,8 +976,23 @@ independentes** para operação completa da plataforma (primário + secundário)
 - Sem `git push` sem instrução explícita. Sem `--force`. Sem reescrever histórico já
   publicado.
 - Identidade do repo: `niara <niaragaed@gmail.com>` (configurada localmente via
-  `git config user.name`/`user.email`, sem `--global`). Sem trailer
-  `Co-Authored-By: Claude`, sem "Generated with Claude Code".
+  `git config user.name`/`user.email`, sem `--global`) — isso define autor/committer
+  de cada commit, **sem nenhuma relação** com o trailer abaixo (são dois mecanismos
+  independentes; a frase anterior deste arquivo dava a entender que um garantia o
+  outro, e isso estava errado).
+- 🔴 Sem trailer `Co-Authored-By: Claude`, sem "Generated with Claude Code" — regra do
+  projeto, mas **não automática**: depende de `.claude/settings.json` existir, na raiz
+  do repo, com exatamente:
+  ```json
+  {
+    "includeCoAuthoredBy": false
+  }
+  ```
+  Esse arquivo está no `.gitignore` (`/.claude/`) — nunca é versionado, então
+  **precisa ser criado à mão em cada máquina/clone novo**, antes do primeiro commit.
+  Sem ele, o Claude Code adiciona o trailer por padrão, mesmo com a identidade acima
+  corretamente configurada — foi exatamente o que aconteceu no repositório irmão
+  (`niara-PMEs`) antes de este arquivo existir lá.
 - Repositório público: sem segredos versionados. `.gitignore` cobre `out/`, `cache/`,
   `broadcast/` (exceto dry-run/local), `.env`.
 - Sem deploy em Sepolia (`--broadcast`) sem instrução explícita. Scripts de deploy
