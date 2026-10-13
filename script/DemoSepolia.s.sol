@@ -10,79 +10,79 @@ import {OfertaCaptacaoFactory} from "../src/captacao/OfertaCaptacaoFactory.sol";
 import {MockBRL} from "../src/mocks/MockBRL.sol";
 
 /// @title DemoSepolia
-/// @notice Parte 2/2 da demo pública da Fase 2 em Sepolia — rodar só depois de
-/// `DemoSepolia_Setup.s.sol` e de >= 1h de tempo REAL terem decorrido (ver NatSpec daquele
-/// script sobre por que o timelock não pode ser pulado em rede real). Lê os endereços
-/// implantados em `./script/output/demo-sepolia.json`, executa a concessão de `AGENTE_ROLE`
-/// pendente, e roda o ciclo completo de uma captação com subscrição cheia: cria oferta,
-/// atesta cotas, cria a captação, registra no gateway, os dois investidores aportam até a
-/// meta máxima (fechamento antecipado, sem esperar o prazo), encerra, os dois resgatam
-/// cotas e os recursos são liberados ao emissor.
-/// @dev Parâmetros da oferta de demo fixados nesta constante — ver instrução de demo
+/// @notice Part 2/2 of the public Phase 2 demo on Sepolia. Run only after
+/// `DemoSepolia_Setup.s.sol` and after >= 1h of REAL time has passed (see that script's
+/// NatSpec on why the timelock cannot be skipped on a real network). Reads the addresses
+/// deployed in `./script/output/demo-sepolia.json`, executes the pending `AGENTE_ROLE` grant,
+/// and runs the full cycle of a fully subscribed fundraising: creates the offering, attests
+/// shares, creates the fundraising, registers it in the gateway, the two investors invest up
+/// to the maximum target (early close, without waiting for the deadline), closes it, both
+/// redeem shares and the funds are released to the issuer.
+/// @dev Demo offering parameters are fixed in this constant; see the demo instruction
 /// (Sepolia): precoPorCota=100 mBRL, metaMinima=3000 mBRL, metaMaxima=5000 mBRL,
-/// tetoPorInvestidor=20000 mBRL, taxaBps=0, aportes 3000+2000=5000=metaMaxima (50 cotas).
+/// tetoPorInvestidor=20000 mBRL, taxaBps=0, investments 3000+2000=5000=metaMaxima (50 shares).
 contract DemoSepolia is Script {
     string internal constant OUTPUT_PATH = "./script/output/demo-sepolia.json";
 
-    uint256 internal constant META_MINIMA = 3_000 ether;
-    uint256 internal constant META_MAXIMA = 5_000 ether;
-    uint256 internal constant PRECO_POR_COTA = 100 ether;
-    uint256 internal constant TETO_POR_INVESTIDOR = 20_000 ether;
-    uint256 internal constant TAXA_BPS = 0;
-    uint256 internal constant PRAZO_SEGUNDOS = 1 days;
+    uint256 internal constant MIN_TARGET = 3_000 ether;
+    uint256 internal constant MAX_TARGET = 5_000 ether;
+    uint256 internal constant PRICE_PER_SHARE = 100 ether;
+    uint256 internal constant PER_INVESTOR_CAP = 20_000 ether;
+    uint256 internal constant FEE_BPS = 0;
+    uint256 internal constant DEADLINE_SECONDS = 1 days;
 
-    uint256 internal constant APORTE_INVESTIDOR1 = 3_000 ether;
-    uint256 internal constant APORTE_INVESTIDOR2 = 2_000 ether;
+    uint256 internal constant INVESTOR1_INVESTMENT = 3_000 ether;
+    uint256 internal constant INVESTOR2_INVESTMENT = 2_000 ether;
 
-    uint256 internal constant SALDO_ETH_MINIMO_INVESTIDOR = 0.01 ether;
-    uint256 internal constant TOP_UP_ETH_INVESTIDOR = 0.02 ether;
+    uint256 internal constant INVESTOR_MIN_ETH_BALANCE = 0.01 ether;
+    uint256 internal constant INVESTOR_ETH_TOP_UP = 0.02 ether;
 
     struct Config {
         uint256 deployerPk;
-        uint256 investidor1Pk;
-        uint256 investidor2Pk;
+        uint256 investor1Pk;
+        uint256 investor2Pk;
         address deployer;
-        address investidor1;
-        address investidor2;
-        address emissorWallet;
-        address protocoloWallet;
+        address investor1;
+        address investor2;
+        address issuerWallet;
+        address protocolWallet;
     }
 
     struct Infra {
-        MockBRL moeda;
+        MockBRL currency;
         EmissaoGateway gateway;
         ParticipacaoTokenFactory tokenFactory;
-        OfertaCaptacaoFactory captacaoFactory;
+        OfertaCaptacaoFactory fundraisingFactory;
     }
 
     function run() external {
         Config memory cfg = _readConfig();
-        Infra memory infra = _lerEnderecos();
+        Infra memory infra = _readAddresses();
 
         vm.startBroadcast(cfg.deployerPk);
-        _executarAgente(infra, cfg.deployer);
+        _executeAgent(infra, cfg.deployer);
         vm.stopBroadcast();
 
         vm.startBroadcast(cfg.deployerPk);
-        (address token, address oferta) = _criarOfertaECaptacao(infra, cfg);
-        infra.moeda.mint(cfg.investidor1, APORTE_INVESTIDOR1);
-        infra.moeda.mint(cfg.investidor2, APORTE_INVESTIDOR2);
-        _topUpEthSeNecessario(cfg.investidor1);
-        _topUpEthSeNecessario(cfg.investidor2);
+        (address token, address oferta) = _createOfferingAndFundraising(infra, cfg);
+        infra.currency.mint(cfg.investor1, INVESTOR1_INVESTMENT);
+        infra.currency.mint(cfg.investor2, INVESTOR2_INVESTMENT);
+        _topUpEthIfNeeded(cfg.investor1);
+        _topUpEthIfNeeded(cfg.investor2);
         vm.stopBroadcast();
 
-        _aportar(cfg.investidor1Pk, infra.moeda, oferta, APORTE_INVESTIDOR1);
-        _aportar(cfg.investidor2Pk, infra.moeda, oferta, APORTE_INVESTIDOR2);
+        _invest(cfg.investor1Pk, infra.currency, oferta, INVESTOR1_INVESTMENT);
+        _invest(cfg.investor2Pk, infra.currency, oferta, INVESTOR2_INVESTMENT);
 
         vm.startBroadcast(cfg.deployerPk);
         OfertaCaptacao(oferta).encerrar();
         vm.stopBroadcast();
 
-        vm.startBroadcast(cfg.investidor1Pk);
+        vm.startBroadcast(cfg.investor1Pk);
         OfertaCaptacao(oferta).resgatarCotas();
         vm.stopBroadcast();
 
-        vm.startBroadcast(cfg.investidor2Pk);
+        vm.startBroadcast(cfg.investor2Pk);
         OfertaCaptacao(oferta).resgatarCotas();
         vm.stopBroadcast();
 
@@ -90,48 +90,48 @@ contract DemoSepolia is Script {
         OfertaCaptacao(oferta).liberarParaEmissor();
         vm.stopBroadcast();
 
-        _logResultados(infra, cfg, token, oferta);
+        _logResults(infra, cfg, token, oferta);
     }
 
-    // ── Configuração ────────────────────────────────────────────────────────────────────
+    // ── Configuration ───────────────────────────────────────────────────────────────────
 
     function _readConfig() internal view returns (Config memory cfg) {
         cfg.deployerPk = vm.envUint("PRIVATE_KEY");
-        cfg.investidor1Pk = vm.envUint("INVESTIDOR1_PRIVATE_KEY");
-        cfg.investidor2Pk = vm.envUint("INVESTIDOR2_PRIVATE_KEY");
+        cfg.investor1Pk = vm.envUint("INVESTIDOR1_PRIVATE_KEY");
+        cfg.investor2Pk = vm.envUint("INVESTIDOR2_PRIVATE_KEY");
         cfg.deployer = vm.addr(cfg.deployerPk);
-        cfg.investidor1 = vm.addr(cfg.investidor1Pk);
-        cfg.investidor2 = vm.addr(cfg.investidor2Pk);
-        cfg.emissorWallet = vm.envAddress("EMISSOR_WALLET_ADDRESS");
-        cfg.protocoloWallet = vm.envAddress("PROTOCOLO_WALLET_ADDRESS");
+        cfg.investor1 = vm.addr(cfg.investor1Pk);
+        cfg.investor2 = vm.addr(cfg.investor2Pk);
+        cfg.issuerWallet = vm.envAddress("EMISSOR_WALLET_ADDRESS");
+        cfg.protocolWallet = vm.envAddress("PROTOCOLO_WALLET_ADDRESS");
     }
 
-    function _lerEnderecos() internal returns (Infra memory infra) {
+    function _readAddresses() internal returns (Infra memory infra) {
         string memory json = vm.readFile(OUTPUT_PATH);
-        infra.moeda = MockBRL(vm.parseJsonAddress(json, ".moeda"));
+        infra.currency = MockBRL(vm.parseJsonAddress(json, ".currency"));
         infra.gateway = EmissaoGateway(vm.parseJsonAddress(json, ".gateway"));
         infra.tokenFactory = ParticipacaoTokenFactory(vm.parseJsonAddress(json, ".tokenFactory"));
-        infra.captacaoFactory = OfertaCaptacaoFactory(vm.parseJsonAddress(json, ".captacaoFactory"));
+        infra.fundraisingFactory = OfertaCaptacaoFactory(vm.parseJsonAddress(json, ".fundraisingFactory"));
     }
 
-    // ── Execução do AGENTE_ROLE proposto em DemoSepolia_Setup ──────────────────────────
+    // ── Execution of the AGENTE_ROLE proposed in DemoSepolia_Setup ─────────────────────
 
-    function _executarAgente(Infra memory infra, address agente) internal {
+    function _executeAgent(Infra memory infra, address agent) internal {
         bytes32 role = keccak256("AGENTE_ROLE");
-        address[3] memory alvos =
-            [address(infra.gateway), address(infra.tokenFactory), address(infra.captacaoFactory)];
-        for (uint256 i = 0; i < alvos.length; i++) {
-            (bool ok,) = alvos[i].call(abi.encodeWithSignature("executeGrantRole(bytes32,address)", role, agente));
-            require(ok, "executeGrantRole falhou (timelock ainda nao decorrido?)");
+        address[3] memory targets =
+            [address(infra.gateway), address(infra.tokenFactory), address(infra.fundraisingFactory)];
+        for (uint256 i = 0; i < targets.length; i++) {
+            (bool ok,) = targets[i].call(abi.encodeWithSignature("executeGrantRole(bytes32,address)", role, agent));
+            require(ok, "executeGrantRole failed (timelock not elapsed yet?)");
         }
-        // RegistroInvestidorQualificado nao e' usado nesta demo (sem investidor qualificado
-        // testado), mas seu AGENTE_ROLE tambem foi proposto em DemoSepolia_Setup — deixado
-        // pendente de propósito, sem custo funcional para este ciclo.
+        // RegistroInvestidorQualificado is not used in this demo (no qualified investor
+        // tested), but its AGENTE_ROLE was also proposed in DemoSepolia_Setup; it is left
+        // pending on purpose, with no functional cost for this cycle.
     }
 
-    // ── Sequência operacional: criarOferta → atestarCotas → criarCaptacao → registrarCaptacao ──
+    // ── Operational sequence: criarOferta → atestarCotas → criarCaptacao → registrarCaptacao ──
 
-    function _criarOfertaECaptacao(Infra memory infra, Config memory cfg)
+    function _createOfferingAndFundraising(Infra memory infra, Config memory cfg)
         internal
         returns (address token, address oferta)
     {
@@ -142,31 +142,31 @@ contract DemoSepolia is Script {
             keccak256(abi.encode("cnpj-demo-sepolia", block.timestamp)),
             "2026-DEMO-SEPOLIA"
         );
-        infra.gateway.atestarCotas(token, (META_MAXIMA / PRECO_POR_COTA) * 1 ether);
+        infra.gateway.atestarCotas(token, (MAX_TARGET / PRICE_PER_SHARE) * 1 ether);
 
-        oferta = infra.captacaoFactory.criarCaptacao(
+        oferta = infra.fundraisingFactory.criarCaptacao(
             token,
-            META_MINIMA,
-            META_MAXIMA,
-            PRECO_POR_COTA,
-            block.timestamp + PRAZO_SEGUNDOS,
-            TETO_POR_INVESTIDOR,
-            TAXA_BPS,
-            cfg.emissorWallet,
-            cfg.protocoloWallet
+            MIN_TARGET,
+            MAX_TARGET,
+            PRICE_PER_SHARE,
+            block.timestamp + DEADLINE_SECONDS,
+            PER_INVESTOR_CAP,
+            FEE_BPS,
+            cfg.issuerWallet,
+            cfg.protocolWallet
         );
         infra.gateway.registrarCaptacao(token, oferta);
     }
 
-    function _topUpEthSeNecessario(address investidor) internal {
-        if (investidor.balance < SALDO_ETH_MINIMO_INVESTIDOR) {
-            (bool ok,) = investidor.call{value: TOP_UP_ETH_INVESTIDOR}("");
-            require(ok, "top-up de ETH falhou");
+    function _topUpEthIfNeeded(address investidor) internal {
+        if (investidor.balance < INVESTOR_MIN_ETH_BALANCE) {
+            (bool ok,) = investidor.call{value: INVESTOR_ETH_TOP_UP}("");
+            require(ok, "ETH top-up failed");
         }
     }
 
-    function _aportar(uint256 investidorPk, MockBRL moeda, address oferta, uint256 valor) internal {
-        vm.startBroadcast(investidorPk);
+    function _invest(uint256 investorPk, MockBRL moeda, address oferta, uint256 valor) internal {
+        vm.startBroadcast(investorPk);
         moeda.approve(oferta, valor);
         OfertaCaptacao(oferta).aportar(valor);
         vm.stopBroadcast();
@@ -174,19 +174,19 @@ contract DemoSepolia is Script {
 
     // ── Logs ────────────────────────────────────────────────────────────────────────────
 
-    function _logResultados(Infra memory infra, Config memory cfg, address token, address oferta) internal view {
+    function _logResults(Infra memory infra, Config memory cfg, address token, address oferta) internal view {
         console2.log("== DemoSepolia: ciclo completo ==");
         console2.log("Token (ParticipacaoToken):", token);
-        console2.log("Oferta (escrow OfertaCaptacao):", oferta);
-        console2.log("Estado final (1 = EncerradaSucesso):", uint256(OfertaCaptacao(oferta).estado()));
-        console2.log("Total arrecadado:", OfertaCaptacao(oferta).totalArrecadado());
+        console2.log("Offering (OfertaCaptacao escrow):", oferta);
+        console2.log("Final state (1 = EncerradaSucesso, closed with success):", uint256(OfertaCaptacao(oferta).estado()));
+        console2.log("Total raised:", OfertaCaptacao(oferta).totalArrecadado());
         console2.log("");
-        console2.log("Cotas investidor 1:", ParticipacaoToken(token).balanceOf(cfg.investidor1));
-        console2.log("Cotas investidor 2:", ParticipacaoToken(token).balanceOf(cfg.investidor2));
-        console2.log("totalSupply do token (deve ser 50 ether = 50 cotas):", ParticipacaoToken(token).totalSupply());
+        console2.log("Investor 1 shares:", ParticipacaoToken(token).balanceOf(cfg.investor1));
+        console2.log("Investor 2 shares:", ParticipacaoToken(token).balanceOf(cfg.investor2));
+        console2.log("Token totalSupply (should be 50 ether = 50 shares):", ParticipacaoToken(token).totalSupply());
         console2.log("");
-        console2.log("MockBRL no emissor apos liberacao (deve ser 5000 ether):", infra.moeda.balanceOf(cfg.emissorWallet));
-        console2.log("MockBRL no protocolo apos liberacao (taxa 0):", infra.moeda.balanceOf(cfg.protocoloWallet));
-        console2.log("MockBRL restante no escrow (deve ser 0):", infra.moeda.balanceOf(oferta));
+        console2.log("Issuer MockBRL after release (should be 5000 ether):", infra.currency.balanceOf(cfg.issuerWallet));
+        console2.log("Protocol MockBRL after release (fee 0):", infra.currency.balanceOf(cfg.protocolWallet));
+        console2.log("MockBRL left in escrow (should be 0):", infra.currency.balanceOf(oferta));
     }
 }

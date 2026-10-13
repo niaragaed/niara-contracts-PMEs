@@ -14,12 +14,12 @@ contract ParticipacaoTokenFactoryTest is Test {
     DenyAllTransferPolicy public policy;
 
     address public admin = makeAddr("admin");
-    address public agente = makeAddr("agente");
-    address public estranho = makeAddr("estranho");
+    address public agent = makeAddr("agente");
+    address public stranger = makeAddr("estranho");
     address public gatewayAddr = makeAddr("gateway");
 
     uint256 public constant TIMELOCK_DELAY = 1 hours;
-    bytes32 public agenteRole;
+    bytes32 public agentRole;
 
     bytes32 public constant CNPJ_REF = keccak256("12.345.678/0001-99");
 
@@ -29,8 +29,8 @@ contract ParticipacaoTokenFactoryTest is Test {
 
         factory =
             new ParticipacaoTokenFactory(admin, address(implementacao), gatewayAddr, address(policy), TIMELOCK_DELAY);
-        agenteRole = factory.AGENTE_ROLE();
-        _grantRole(agenteRole, agente);
+        agentRole = factory.AGENTE_ROLE();
+        _grantRole(agentRole, agent);
     }
 
     function _grantRole(bytes32 role, address account) internal {
@@ -65,16 +65,16 @@ contract ParticipacaoTokenFactoryTest is Test {
 
     // ── criarOferta ─────────────────────────────────────────────────────────────────────
 
-    function test_CriarOferta_OnlyAgente() public {
-        vm.prank(estranho);
+    function test_CriarOferta_OnlyAgent() public {
+        vm.prank(stranger);
         vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, estranho, agenteRole)
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, agentRole)
         );
         factory.criarOferta("Oferta X", "nX", "Empresa X", CNPJ_REF, "2026-A");
     }
 
     function test_CriarOferta_ClonesAndInitializes() public {
-        vm.prank(agente);
+        vm.prank(agent);
         address tokenAddr = factory.criarOferta("Oferta X", "nX", "Empresa X", CNPJ_REF, "2026-A");
 
         ParticipacaoToken token = ParticipacaoToken(tokenAddr);
@@ -88,7 +88,7 @@ contract ParticipacaoTokenFactoryTest is Test {
     }
 
     function test_CriarOferta_RegistersOferta() public {
-        vm.prank(agente);
+        vm.prank(agent);
         address tokenAddr = factory.criarOferta("Oferta X", "nX", "Empresa X", CNPJ_REF, "2026-A");
 
         assertTrue(factory.isOferta(tokenAddr));
@@ -97,20 +97,20 @@ contract ParticipacaoTokenFactoryTest is Test {
     }
 
     function test_CriarOferta_EmitsEvent() public {
-        // `Clones.clone` usa CREATE simples — o endereço do clone depende do nonce da
-        // factory no momento da chamada (nonce 1, pois contratos começam em nonce 1).
-        address clonePrevisto = vm.computeCreateAddress(address(factory), 1);
+        // `Clones.clone` uses plain CREATE: the clone's address depends on the factory's
+        // nonce at call time (nonce 1, since contracts start at nonce 1).
+        address predictedClone = vm.computeCreateAddress(address(factory), 1);
 
         vm.expectEmit(true, true, true, true, address(factory));
-        emit ParticipacaoTokenFactory.OfertaCriada(clonePrevisto, "Empresa X", CNPJ_REF, "2026-A");
-        vm.prank(agente);
+        emit ParticipacaoTokenFactory.OfertaCriada(predictedClone, "Empresa X", CNPJ_REF, "2026-A");
+        vm.prank(agent);
         factory.criarOferta("Oferta X", "nX", "Empresa X", CNPJ_REF, "2026-A");
     }
 
     function test_CriarOferta_MultipleOffersAreIndependentClones() public {
-        vm.prank(agente);
+        vm.prank(agent);
         address tokenA = factory.criarOferta("Oferta A", "nA", "Empresa A", CNPJ_REF, "2026-A");
-        vm.prank(agente);
+        vm.prank(agent);
         address tokenB = factory.criarOferta("Oferta B", "nB", "Empresa B", CNPJ_REF, "2026-B");
 
         assertTrue(tokenA != tokenB);
@@ -120,73 +120,74 @@ contract ParticipacaoTokenFactoryTest is Test {
     }
 
     function test_CriarOferta_RevertsWhenPaused() public {
-        vm.prank(agente);
+        vm.prank(agent);
         factory.pause();
 
-        vm.prank(agente);
+        vm.prank(agent);
         vm.expectRevert(Pausable.EnforcedPause.selector);
         factory.criarOferta("Oferta X", "nX", "Empresa X", CNPJ_REF, "2026-A");
     }
 
     // ── Pausa ───────────────────────────────────────────────────────────────────────────
 
-    function test_Pause_OnlyAgente() public {
-        vm.prank(estranho);
+    function test_Pause_OnlyAgent() public {
+        vm.prank(stranger);
         vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, estranho, agenteRole)
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, agentRole)
         );
         factory.pause();
     }
 
     function test_PauseUnpause_RoundTrip() public {
-        vm.prank(agente);
+        vm.prank(agent);
         factory.pause();
         assertTrue(factory.paused());
 
-        vm.prank(agente);
+        vm.prank(agent);
         factory.unpause();
         assertFalse(factory.paused());
     }
 
-    // ── Troca de implementação via timelock ─────────────────────────────────────────────
+    // ── Implementation swap via timelock ────────────────────────────────────────────────
 
     function test_SetImplementacao_RequiresTimelock() public {
-        ParticipacaoToken novaImpl = new ParticipacaoToken();
+        ParticipacaoToken newImpl = new ParticipacaoToken();
 
         vm.prank(admin);
-        factory.proposeSetImplementacao(address(novaImpl));
+        factory.proposeSetImplementacao(address(newImpl));
 
-        // Ainda não decorreu o atraso — deve reverter.
+        // The delay has not passed yet, so it must revert.
         vm.prank(admin);
         vm.expectRevert();
-        factory.executeSetImplementacao(address(novaImpl));
+        factory.executeSetImplementacao(address(newImpl));
 
         vm.warp(block.timestamp + TIMELOCK_DELAY);
         vm.prank(admin);
-        factory.executeSetImplementacao(address(novaImpl));
+        factory.executeSetImplementacao(address(newImpl));
 
-        assertEq(factory.implementacao(), address(novaImpl));
+        assertEq(factory.implementacao(), address(newImpl));
     }
 
     function test_SetImplementacao_OnlyAffectsFutureOffers() public {
-        vm.prank(agente);
-        address tokenAntigo = factory.criarOferta("Oferta A", "nA", "Empresa A", CNPJ_REF, "2026-A");
+        vm.prank(agent);
+        address oldToken = factory.criarOferta("Oferta A", "nA", "Empresa A", CNPJ_REF, "2026-A");
 
-        ParticipacaoToken novaImpl = new ParticipacaoToken();
+        ParticipacaoToken newImpl = new ParticipacaoToken();
         vm.prank(admin);
-        factory.proposeSetImplementacao(address(novaImpl));
+        factory.proposeSetImplementacao(address(newImpl));
         vm.warp(block.timestamp + TIMELOCK_DELAY);
         vm.prank(admin);
-        factory.executeSetImplementacao(address(novaImpl));
+        factory.executeSetImplementacao(address(newImpl));
 
-        vm.prank(agente);
-        address tokenNovo = factory.criarOferta("Oferta B", "nB", "Empresa B", CNPJ_REF, "2026-B");
+        vm.prank(agent);
+        address newToken = factory.criarOferta("Oferta B", "nB", "Empresa B", CNPJ_REF, "2026-B");
 
-        // O token antigo continua funcional e distinto do novo — a troca de implementação não
-        // afeta clones já criados (cada clone congela a lógica da implementação no momento em
-        // que foi clonado, via delegatecall para o endereço fixo do template usado então).
-        assertTrue(tokenAntigo != tokenNovo);
-        assertEq(ParticipacaoToken(tokenAntigo).name(), "Oferta A");
+        // The old token is still functional and distinct from the new one: swapping the
+        // implementation does not affect clones already created (each clone freezes the
+        // implementation's logic at the time it was cloned, via delegatecall to the fixed address
+        // of the template used then).
+        assertTrue(oldToken != newToken);
+        assertEq(ParticipacaoToken(oldToken).name(), "Oferta A");
     }
 
     function test_SetImplementacao_RevertsForZeroAddress() public {
@@ -195,7 +196,7 @@ contract ParticipacaoTokenFactoryTest is Test {
         factory.proposeSetImplementacao(address(0));
     }
 
-    // ── Troca da política padrão via timelock ───────────────────────────────────────────
+    // ── Default policy change via timelock ──────────────────────────────────────────────
 
     function test_SetTransferPolicyPadrao_RequiresTimelock() public {
         DenyAllTransferPolicy novaPolitica = new DenyAllTransferPolicy();

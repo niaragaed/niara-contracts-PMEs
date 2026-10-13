@@ -1,19 +1,20 @@
-# Plano — `OfertaOrquestrador` (Fase 0: inspeção + plano, sem código)
+# Plan — `OfertaOrquestrador` (Phase 0: inspection + plan, no code)
 
-Documento produzido sem alterar nenhum `.sol`, sem commit. Confirma as decisões travadas
-contra o código-fonte real (lido nesta sessão) e detalha o contrato antes da implementação.
+Document produced without changing any `.sol` file and without committing. It checks the
+locked decisions against the real source code (read in this session) and details the
+contract before implementation.
 
-**Veredito geral: nenhuma decisão travada é inviável.** Todas as assinaturas usadas pelas
-decisões travadas batem exatamente com o código existente — a orquestração encaixa sem
-adaptar nenhum contrato atual. Há dois pontos que não são decisões travadas erradas, mas
-lacunas que as decisões travadas não cobriram — sinalizados em "Observações abertas" no
-final, para sua decisão antes da implementação.
+**Overall verdict: none of the locked decisions is unworkable.** Every signature used by the
+locked decisions matches the existing code exactly; the orchestration fits without adapting
+any current contract. There are two points that are not wrong locked decisions but gaps the
+locked decisions did not cover; they are flagged under "Open observations" at the end, for
+your decision before implementation.
 
 ---
 
-## 1. Inspeção solicitada
+## 1. Requested inspection
 
-### 1.1 Assinaturas confirmadas (lidas de `src/`, não de memória)
+### 1.1 Confirmed signatures (read from `src/`, not from memory)
 
 ```solidity
 // src/token/ParticipacaoTokenFactory.sol
@@ -27,10 +28,10 @@ function criarOferta(
 
 // src/emissao/EmissaoGateway.sol
 function atestarCotas(address token, uint256 novoTeto) external onlyRole(AGENTE_ROLE);
-// sem retorno
+// no return value
 
 function registrarCaptacao(address token, address oferta) external onlyRole(AGENTE_ROLE);
-// sem retorno
+// no return value
 
 // src/captacao/OfertaCaptacaoFactory.sol
 function criarCaptacao(
@@ -46,185 +47,190 @@ function criarCaptacao(
 ) external onlyRole(AGENTE_ROLE) whenNotPaused returns (address oferta);
 ```
 
-As quatro encaixam sem adaptação na sequência descrita nas decisões travadas — confirmado
-também contra `script/DemoNiaraPMEsOnChain.s.sol` (`_criarOfertaECaptacao`), que já executa
-essa exata sequência hoje (só que com o AGENTE humano assinando, não um contrato).
+All four fit without adaptation into the sequence described in the locked decisions. This is
+also confirmed against `script/DemoNiaraPMEsOnChain.s.sol` (`_createOfferingAndFundraising`),
+which already runs this exact sequence today (only with the human AGENT signing, not a
+contract).
 
-Único ponto de atenção: `criarCaptacao` recebe `taxaBps` na 7ª posição e `emissorWallet`/
-`protocoloWallet` nas posições 8/9 — o orquestrador precisa montar essa chamada com
-`emissorWallet = msg.sender` (forçado) e `taxaBps`/`protocoloWallet` vindos do seu próprio
-storage, nunca de parâmetro externo (ver §3).
+The only point of attention: `criarCaptacao` takes `taxaBps` in 7th position and
+`emissorWallet`/`protocoloWallet` in positions 8/9. The orchestrator must build that call with
+`emissorWallet = msg.sender` (forced) and `taxaBps`/`protocoloWallet` coming from its own
+storage, never from an external parameter (see §3).
 
-### 1.2 `decimals()` do `MockBRL`
+### 1.2 `MockBRL`'s `decimals()`
 
-`MockBRL` herda `ERC20` da OpenZeppelin sem sobrescrever `decimals()` → **18 casas**, igual ao
-`ParticipacaoToken`. Confirmado em `src/mocks/MockBRL.sol` (NatSpec já documenta "18 casas
-decimais, não as 2 casas usuais do BRL fiat").
+`MockBRL` inherits OpenZeppelin's `ERC20` without overriding `decimals()` → **18 decimals**,
+the same as `ParticipacaoToken`. Confirmed in `src/mocks/MockBRL.sol` (its NatSpec already
+documents "18 decimals, not the usual 2 decimals of fiat BRL").
 
-Logo, `TETO_OFERTA` (limite de R$ 15.000.000 por oferta) deve ser:
+So `TETO_OFERTA` (the R$ 15,000,000 cap per offering) must be:
 
 ```solidity
 uint256 public constant TETO_OFERTA = 15_000_000 ether; // 15_000_000 * 1e18
 ```
 
-### 1.3 Concessão de `AGENTE_ROLE` ao orquestrador
+### 1.3 Granting `AGENTE_ROLE` to the orchestrator
 
-`AGENTE_ROLE` (mesmo valor de hash — `keccak256("AGENTE_ROLE")` — em `ParticipacaoTokenFactory`,
-`EmissaoGateway` e `OfertaCaptacaoFactory`, mas três instâncias de `AccessControl`
-**independentes**: conceder num contrato não afeta os outros dois). `getRoleAdmin(AGENTE_ROLE)`
-não é sobrescrito em nenhum dos três → o admin é sempre `DEFAULT_ADMIN_ROLE`, hoje detido pelo
-admin da plataforma (`0x0D41059eBde70a46EB5207af0837921594CAFC05`, por `CLAUDE.md`).
+`AGENTE_ROLE` has the same hash value (`keccak256("AGENTE_ROLE")`) in
+`ParticipacaoTokenFactory`, `EmissaoGateway` and `OfertaCaptacaoFactory`, but they are three
+**independent** `AccessControl` instances: granting it on one contract does not affect the
+other two. `getRoleAdmin(AGENTE_ROLE)` is not overridden in any of the three → the admin is
+always `DEFAULT_ADMIN_ROLE`, currently held by the platform admin
+(`0x0D41059eBde70a46EB5207af0837921594CAFC05`, per `CLAUDE.md`).
 
-Sequência exata (assumindo a infra já implantada, como em Sepolia hoje):
+Exact sequence (assuming the infrastructure is already deployed, as on Sepolia today):
 
-1. Deploy do `OfertaOrquestrador` → endereço `orquestrador`.
-2. `ParticipacaoTokenFactory.proposeGrantRole(AGENTE_ROLE, orquestrador)` — admin.
-3. `EmissaoGateway.proposeGrantRole(AGENTE_ROLE, orquestrador)` — admin.
-4. `OfertaCaptacaoFactory.proposeGrantRole(AGENTE_ROLE, orquestrador)` — admin.
-   (2–4 são transações independentes, em contratos diferentes — ordem entre elas não importa,
-   podem até ir no mesmo bloco.)
-5. Esperar o `timelockDelay()` vigente em **cada um** dos três contratos decorrer (hoje 1h nos
-   três, mas checar antes — nada impede que um deles tenha tido o próprio delay alterado por
-   `proposeSetTimelockDelay`/`executeSetTimelockDelay` desde o deploy original).
-6. `executeGrantRole(AGENTE_ROLE, orquestrador)` nos três contratos.
-7. `AGENTE_ROLE` do **próprio** orquestrador (para quem vai operar `autorizarEmissor`) também
-   passa pelo timelock do próprio orquestrador — `TimelockedAccessControl` não abre exceção
-   para o próprio contrato: mais um `propose` + espera + `execute`.
-8. Só a partir daqui `autorizarEmissor(empresa)` funciona (imediato, sem timelock — decisão
-   travada).
+1. Deploy `OfertaOrquestrador` → address `orchestrator`.
+2. `ParticipacaoTokenFactory.proposeGrantRole(AGENTE_ROLE, orchestrator)`: admin.
+3. `EmissaoGateway.proposeGrantRole(AGENTE_ROLE, orchestrator)`: admin.
+4. `OfertaCaptacaoFactory.proposeGrantRole(AGENTE_ROLE, orchestrator)`: admin.
+   (2–4 are independent transactions on different contracts; their order does not matter,
+   and they can even go in the same block.)
+5. Wait for the current `timelockDelay()` of **each** of the three contracts to elapse (1h on
+   all three today, but check first: nothing prevents one of them from having had its own
+   delay changed via `proposeSetTimelockDelay`/`executeSetTimelockDelay` since the original
+   deploy).
+6. `executeGrantRole(AGENTE_ROLE, orchestrator)` on all three contracts.
+7. The orchestrator's **own** `AGENTE_ROLE` (for whoever will operate `autorizarEmissor`)
+   also goes through the orchestrator's own timelock: `TimelockedAccessControl` makes no
+   exception for the contract itself, so it is one more `propose` + wait + `execute`.
+8. Only from this point does `autorizarEmissor(company)` work (immediate, no timelock: a
+   locked decision).
 
-**Se o orquestrador for implantado antes de ter os papéis** (ou antes do timelock decorrer):
-`criarOfertaCompleta` reverte limpo, de forma atômica, na primeira subchamada
-(`ParticipacaoTokenFactory.criarOferta`) com o erro padrão do `AccessControl` da OZ
-(`AccessControlUnauthorizedAccount(orquestrador, AGENTE_ROLE)`), propagado (bubbled) até quem
-chamou. Nenhum estado é criado, nenhum evento emitido. O mesmo vale se só 2 dos 3 papéis já
-tiverem sido concedidos: a sequência chega a criar o token e atestar o teto, mas reverte na
-falta do terceiro papel — e a EVM desfaz **também** as duas subchamadas anteriores
-automaticamente, porque tudo está dentro de uma única transação externa. É esse desfazimento
-atômico nativo da EVM — não uma lógica de rollback escrita à mão — que resolve o Obstáculo 1
-do problema original. Total de transações fixas até a primeira oferta self-service: 1 deploy +
-3 propose + 3 execute (papéis nas factories/gateway) + 1 propose + 1 execute (papel do próprio
-orquestrador) = **9**, mais uma por emissor autorizado.
+**If the orchestrator is deployed before it has the roles** (or before the timelock
+elapses): `criarOfertaCompleta` reverts cleanly and atomically on the first subcall
+(`ParticipacaoTokenFactory.criarOferta`) with OZ's standard `AccessControl` error
+(`AccessControlUnauthorizedAccount(orchestrator, AGENTE_ROLE)`), bubbled up to the caller. No
+state is created and no event is emitted. The same holds if only 2 of the 3 roles have been
+granted: the sequence gets as far as creating the token and attesting the cap, but reverts on
+the missing third role, and the EVM **also** undoes the two earlier subcalls automatically,
+because everything is inside a single external transaction. It is this native atomic undo of
+the EVM, not hand-written rollback logic, that solves Obstacle 1 of the original problem.
+Total fixed transactions until the first self-service offering: 1 deploy + 3 propose + 3
+execute (roles on the factories/gateway) + 1 propose + 1 execute (the orchestrator's own
+role) = **9**, plus one per authorized issuer.
 
-### 1.4 `EMISSOR_ROLE` do `EmissaoGateway`
+### 1.4 `EmissaoGateway`'s `EMISSOR_ROLE`
 
-**Recomendação: manter exatamente como está — não tocar em `EmissaoGateway.sol`.**
+**Recommendation: keep it exactly as it is; do not touch `EmissaoGateway.sol`.**
 
-Isso não é só a opção mais segura: é a única compatível com duas decisões já travadas ao mesmo
-tempo —
+This is not just the safest option: it is the only one compatible with two locked decisions
+at once:
 
-- "Nenhum contrato existente muda de comportamento" (topo do prompt da Fase 0).
-- "Autorização por allowlist, **sem timelock**" para o emissor (o ponto central do desenho).
+- "No existing contract changes behavior" (top of the Phase 0 prompt).
+- "Authorization by allowlist, **without a timelock**" for the issuer (the central point of
+  the design).
 
-Reaproveitar `EMISSOR_ROLE` significaria conceder/revogar via
-`EmissaoGateway.proposeGrantRole`/`executeGrantRole` — que **é** timelocked (herdado de
-`TimelockedAccessControl`). Isso contradiria a decisão de autorização imediata. A allowlist
-nova (`emissoresAutorizados` no próprio `OfertaOrquestrador`) já resolve exatamente o caso de
-uso para o qual `EMISSOR_ROLE` foi reservado ("ações futuras específicas da empresa
-emissora") — só que num contrato novo, com semântica de timelock diferente da que o papel
-teria se reaproveitado. `EMISSOR_ROLE` continua morta, e agora há uma razão explícita e
-documentável para isso (incompatibilidade de timelock), não apenas "não tinha uso ainda".
+Reusing `EMISSOR_ROLE` would mean granting/revoking it via
+`EmissaoGateway.proposeGrantRole`/`executeGrantRole`, which **is** timelocked (inherited from
+`TimelockedAccessControl`). That would contradict the decision of immediate authorization.
+The new allowlist (`emissoresAutorizados` on `OfertaOrquestrador` itself) already solves
+exactly the use case `EMISSOR_ROLE` had been reserved for ("future actions specific to the
+issuing company"), only in a new contract, with different timelock semantics from what the
+role would have if reused. `EMISSOR_ROLE` stays dead, and now there is an explicit,
+documentable reason for that (timelock incompatibility), not just "it had no use yet".
 
-Consequência para testes: zero — nada muda em `EmissaoGateway.t.sol`. Consequência para
-`CLAUDE.md`: atualizar a nota em "Pendências conhecidas" para registrar essa razão, em vez de
-"reservado, sem uso funcional" genérico.
+Consequence for tests: none; nothing changes in `EmissaoGateway.t.sol`. Consequence for
+`CLAUDE.md`: update the note in "Known open items" to record this reason, instead of the
+generic "reserved, no functional use".
 
-### 1.5 Impacto na suíte atual
+### 1.5 Impact on the current suite
 
-`forge test` na branch limpa (rodado nesta sessão, `~/.foundry/bin/forge.exe test --summary`):
+`forge test` on the clean branch (run in this session,
+`~/.foundry/bin/forge.exe test --summary`):
 
 ```
-266 testes passando, 0 falhando, 0 pulados
+266 tests passing, 0 failing, 0 skipped
 ```
 
-(Bate exatamente com "Resultados de teste (Fase 4)" do `CLAUDE.md`.)
+(Matches "Test results (Phase 4)" in `CLAUDE.md` exactly.)
 
-**Quais testes existentes tendem a quebrar quando o orquestrador ganhar `AGENTE_ROLE`:
-nenhum.** Conferido lendo `test/ParticipacaoTokenFactory.t.sol` (representativo do padrão):
-cada arquivo de teste faz `new ParticipacaoTokenFactory(...)`/`new EmissaoGateway(...)`/
-`new OfertaCaptacaoFactory(...)` do zero no próprio `setUp()`, e concede `AGENTE_ROLE` **só**
-ao endereço `agente` local daquele arquivo (`makeAddr("agente")`). Não há fixture
-compartilhado entre arquivos de teste, e nenhum deles jamais vai instanciar o
-`OfertaOrquestrador` a menos que um teste novo, escrito para ele, decida fazer isso
-deliberadamente. Ou seja: a introdução do orquestrador é puramente aditiva do ponto de vista
-da suíte — 266/266 continua passando sem tocar em nada, e os novos testes vivem isolados em
-`test/OfertaOrquestrador.t.sol` (+ handler de invariante novo), com seu próprio deploy de
-`ParticipacaoTokenFactory`/`EmissaoGateway`/`OfertaCaptacaoFactory` local. Isso só deixaria de
-valer se, no futuro, alguém decidisse compartilhar um fixture entre o orquestrador e outro
-teste — não é o caso aqui.
+**Which existing tests are likely to break once the orchestrator gets `AGENTE_ROLE`: none.**
+Checked by reading `test/ParticipacaoTokenFactory.t.sol` (representative of the pattern):
+each test file does `new ParticipacaoTokenFactory(...)`/`new EmissaoGateway(...)`/
+`new OfertaCaptacaoFactory(...)` from scratch in its own `setUp()`, and grants `AGENTE_ROLE`
+**only** to that file's local `agent` address (`makeAddr("agent")`). There is no fixture
+shared between test files, and none of them will ever instantiate `OfertaOrquestrador` unless
+a new test, written for it, deliberately chooses to. In other words, introducing the
+orchestrator is purely additive from the suite's point of view: 266/266 keeps passing without
+touching anything, and the new tests live in isolation in `test/OfertaOrquestrador.t.sol` (+
+a new invariant handler), with their own local deploy of `ParticipacaoTokenFactory`/
+`EmissaoGateway`/`OfertaCaptacaoFactory`. This would only stop being true if someone later
+decided to share a fixture between the orchestrator and another test, which is not the case
+here.
 
-### 1.6 Gás
+### 1.6 Gas
 
-Estimativa (sem instrumentação real ainda — só o desenho conhecido dos 3 contratos):
+Estimate (no real instrumentation yet, only the known design of the 3 contracts):
 
-| Etapa | Custo aproximado |
+| Step | Approximate cost |
 |---|---|
-| `Clones.clone(implementacaoToken)` + `ParticipacaoToken.initialize(...)` (7 SSTORE cold: `gateway`, `transferPolicy`, `empresa`, `cnpjRef`, `serie`, mais nome/símbolo do ERC20) | ~230k–300k gas |
-| `EmissaoGateway.atestarCotas` (1 SSTORE cold + overhead de chamada externa) | ~35k–45k gas |
-| `Clones.clone(implementacaoOferta)` + `OfertaCaptacao.initialize(...)` (12 campos do `InitParams`, a maioria SSTORE cold) | ~300k–380k gas |
-| `EmissaoGateway.registrarCaptacao` (1 SSTORE em mapping + overhead) | ~35k–45k gas |
-| Overhead do próprio `OfertaOrquestrador` (checagens de limite CVM 88, 4 `CALL`s externas cold, 1 evento) | ~30k–50k gas |
-| **Total estimado `criarOfertaCompleta`** | **~650k–820k gas** |
+| `Clones.clone(implementacaoToken)` + `ParticipacaoToken.initialize(...)` (7 cold SSTOREs: `gateway`, `transferPolicy`, `empresa`, `cnpjRef`, `serie`, plus the ERC20 name/symbol) | ~230k–300k gas |
+| `EmissaoGateway.atestarCotas` (1 cold SSTORE + external call overhead) | ~35k–45k gas |
+| `Clones.clone(implementacaoOferta)` + `OfertaCaptacao.initialize(...)` (12 `InitParams` fields, most of them cold SSTOREs) | ~300k–380k gas |
+| `EmissaoGateway.registrarCaptacao` (1 SSTORE in a mapping + overhead) | ~35k–45k gas |
+| `OfertaOrquestrador`'s own overhead (CVM 88 limit checks, 4 cold external `CALL`s, 1 event) | ~30k–50k gas |
+| **Estimated total for `criarOfertaCompleta`** | **~650k–820k gas** |
 
-Sepolia tem o mesmo limite de bloco que a mainnet atual (30.000.000 gas) — 820k gas é ~2,7%
-de um bloco. **Não há risco de estourar o limite de bloco.** O único risco prático é
-subestimação de gás por parte de carteiras (MetaMask) ao simular uma transação com múltiplos
-`CREATE` internos — recomendação para a integração com `niara-PMEs`: fixar um `gasLimit`
-explícito generoso (ex.: 1.2M) na chamada do frontend em vez de confiar 100% na estimativa
-automática da wallet, para não arriscar "out of gas" por estimativa curta. Confirmar o número
-real com `forge test --gas-report` assim que o contrato existir — este é só um teto de
-planejamento.
+Sepolia has the same block limit as the current mainnet (30,000,000 gas); 820k gas is ~2.7%
+of a block. **There is no risk of exceeding the block limit.** The only practical risk is
+wallets (MetaMask) underestimating gas when simulating a transaction with multiple internal
+`CREATE`s. Recommendation for the `niara-PMEs` integration: set a generous explicit
+`gasLimit` (e.g. 1.2M) on the frontend call instead of relying 100% on the wallet's automatic
+estimate, so as not to risk "out of gas" from a short estimate. Confirm the real number with
+`forge test --gas-report` once the contract exists; this is only a planning ceiling.
 
-### 1.7 Superfície de risco — vetores que a suíte precisa cobrir
+### 1.7 Risk surface: vectors the suite must cover
 
-O orquestrador concentra o caminho de criação de qualquer oferta self-service — um bug nele
-afeta todo mint futuro desse canal. Vetores concretos, cada um mapeado para um teste no §5/§6:
+The orchestrator concentrates the creation path of every self-service offering; a bug in it
+affects every future mint through this channel. Concrete vectors, each mapped to a test in
+§5/§6:
 
-1. **Bypass de allowlist** — qualquer das 4 subchamadas só deve ser alcançável por um endereço
-   em `emissoresAutorizados`. Testar diretamente (não só a função pública) que não há caminho
-   alternativo.
-2. **Manipulação de `emissorWallet`** — não é parâmetro da função; testar que o valor gravado
-   em `OfertaCaptacao.emissorWallet()` é sempre `msg.sender`, nunca outro endereço, mesmo que
-   o "emissor" seja um contrato tentando repassar a chamada.
-3. **Manipulação de `taxaBps`/`protocoloWallet`/`tetoPorInvestidor`** — também não são
-   parâmetros; testar que os valores gravados na captação resultante são sempre os do storage
-   do orquestrador **no momento da chamada**, nunca influenciáveis por calldata do emissor (não
-   há superfície de ataque possível aqui além de confirmar por teste, já que a ABI da função
-   nem aceita esses valores).
-4. **`cotasAutorizadas` como consequência aritmética, não atestação livre** — testar que
-   `token.cotasAutorizadas()` é sempre exatamente `(metaMaxima/precoPorCota) * 1 ether`, e que
-   não existe nenhuma função exposta pelo orquestrador que permita a um emissor chamar
-   `atestarCotas` com um valor arbitrário.
-5. **Limites CVM 88 nos boundaries exatos** — 180 dias, R$ 15.000.000, 25% de lote adicional
-   (ver casos de teste em §5).
-6. **`metaMaxima % precoPorCota != 0`** — deve reverter no orquestrador, antes de qualquer
-   subchamada (ver observação sobre divisão por zero em "Observações abertas").
-7. **Atomicidade sob falha forçada** — nenhuma combinação de sucesso parcial pode persistir.
-   Testável forçando revert na 4ª subchamada (ex.: mock de `EmissaoGateway` que reverte só em
-   `registrarCaptacao`) e verificando que nem `isOferta(token)` nem `isCaptacao(oferta)` ficam
-   `true`.
-8. **Papéis ainda não concedidos** — `criarOfertaCompleta` reverte limpo (erro padrão do
-   `AccessControl`) se o orquestrador ainda não tiver `AGENTE_ROLE` em algum dos 3 contratos
-   (ver §1.3).
-9. **Reentrância — analisada e descartada, não forçada artificialmente.** Nenhuma das 4
-   subchamadas transfere valor nem invoca qualquer hook no `msg.sender` (nem ERC-20, nem
-   ERC-721/1155 `onReceived`, nem `.call` de valor) — `Clones.clone` é `CREATE` sobre a
-   implementação fixa da própria plataforma, não código controlado pelo emissor. Não existe
-   vetor de reentrância real nesta função; documentar essa análise em vez de forçar um mock
-   artificial, no mesmo padrão já usado na Fase 4 para "reentrância pelo lado do ativo" em
-   `LiquidacaoSecundaria` (ver `CLAUDE.md`).
-10. **Paridade com o caminho manual** — uma oferta criada pelo orquestrador precisa se
-    comportar de forma idêntica, ponta a ponta (aportar → encerrar → resgatar), a uma criada
-    manualmente pelo AGENTE — o orquestrador só automatiza a mesma sequência, não deveria
-    introduzir nenhuma diferença de estado observável.
-11. **Front-running — analisado e descartado.** O endereço do clone (`Clones.clone`) não é
-    escolhido pelo emissor nem previsível de forma explorável antes da transação minerar; não
-    há parâmetro sensível a MEV (sem preço/slippage). Não requer teste dedicado, só
-    documentação da análise.
+1. **Allowlist bypass**: each of the 4 subcalls must only be reachable by an address in
+   `emissoresAutorizados`. Test directly (not only the public function) that there is no
+   alternative path.
+2. **`emissorWallet` manipulation**: it is not a function parameter; test that the value
+   stored in `OfertaCaptacao.emissorWallet()` is always `msg.sender`, never another address,
+   even when the "issuer" is a contract trying to relay the call.
+3. **`taxaBps`/`protocoloWallet`/`tetoPorInvestidor` manipulation**: these are not parameters
+   either; test that the values stored in the resulting fundraising are always the ones in
+   the orchestrator's storage **at the time of the call**, never influenced by the issuer's
+   calldata (there is no possible attack surface here beyond confirming it by test, since the
+   function's ABI does not even accept those values).
+4. **`cotasAutorizadas` as an arithmetic consequence, not a free attestation**: test that
+   `token.cotasAutorizadas()` is always exactly `(metaMaxima/precoPorCota) * 1 ether`, and
+   that the orchestrator exposes no function that would let an issuer call `atestarCotas`
+   with an arbitrary value.
+5. **CVM 88 limits at the exact boundaries**: 180 days, R$ 15,000,000, a 25% additional lot
+   (see the test cases in §5).
+6. **`metaMaxima % precoPorCota != 0`**: must revert in the orchestrator, before any subcall
+   (see the note on division by zero in "Open observations").
+7. **Atomicity under forced failure**: no combination of partial success may persist.
+   Testable by forcing a revert in the 4th subcall (e.g. an `EmissaoGateway` mock that
+   reverts only on `registrarCaptacao`) and checking that neither `isOferta(token)` nor
+   `isCaptacao(oferta)` ends up `true`.
+8. **Roles not yet granted**: `criarOfertaCompleta` reverts cleanly (standard
+   `AccessControl` error) if the orchestrator does not yet have `AGENTE_ROLE` on any of the 3
+   contracts (see §1.3).
+9. **Reentrancy: analyzed and ruled out, not artificially forced.** None of the 4 subcalls
+   transfers value or invokes any hook on `msg.sender` (no ERC-20, no ERC-721/1155
+   `onReceived`, no value `.call`); `Clones.clone` is a `CREATE` over the platform's own
+   fixed implementation, not code controlled by the issuer. There is no real reentrancy
+   vector in this function; document this analysis instead of forcing an artificial mock,
+   following the same pattern already used in Phase 4 for "reentrancy from the asset side" in
+   `LiquidacaoSecundaria` (see `CLAUDE.md`).
+10. **Parity with the manual path**: an offering created by the orchestrator must behave
+    identically, end to end (invest → close → redeem), to one created manually by the AGENT.
+    The orchestrator only automates the same sequence and should not introduce any
+    observable state difference.
+11. **Front-running: analyzed and ruled out.** The clone's address (`Clones.clone`) is not
+    chosen by the issuer, nor predictable in an exploitable way before the transaction is
+    mined; there is no MEV-sensitive parameter (no price/slippage). It does not require a
+    dedicated test, only documentation of the analysis.
 
 ---
 
-## 2. Assinatura completa do contrato
+## 2. Full contract signature
 
 ```solidity
 // SPDX-License-Identifier: MIT
@@ -236,34 +242,34 @@ import {EmissaoGateway} from "../emissao/EmissaoGateway.sol";
 import {OfertaCaptacaoFactory} from "../captacao/OfertaCaptacaoFactory.sol";
 
 contract OfertaOrquestrador is TimelockedAccessControl {
-    // ── Papel operacional ──────────────────────────────────────────────────────────
+    // ── Operational role ───────────────────────────────────────────────────────────
     bytes32 public constant AGENTE_ROLE = keccak256("AGENTE_ROLE");
 
-    // ── Constantes regulatórias (Res. CVM 88) ─────────────────────────────────────
-    uint256 public constant TETO_OFERTA = 15_000_000 ether;   // teto de captação por oferta
-    uint256 public constant PRAZO_MAXIMO = 180 days;          // prazo máximo da captação
+    // ── Regulatory constants (CVM Resolution 88) ──────────────────────────────────
+    uint256 public constant TETO_OFERTA = 15_000_000 ether;   // fundraising cap per offering
+    uint256 public constant PRAZO_MAXIMO = 180 days;          // maximum fundraising period
     uint256 public constant LOTE_ADICIONAL_NUMERADOR = 125;   // metaMaxima*100 <= metaMinima*125
-    uint256 public constant LOTE_ADICIONAL_DENOMINADOR = 100; // (lote adicional <= 25%)
+    uint256 public constant LOTE_ADICIONAL_DENOMINADOR = 100; // (additional lot <= 25%)
 
-    // ── Constantes de escala/taxa (mesma disciplina das fases anteriores) ─────────
+    // ── Scale/fee constants (same discipline as the earlier phases) ───────────────
     uint256 public constant UNIDADE_COTA = 1 ether;
     uint256 internal constant TAXA_BPS_MAXIMA = 100;
 
-    // ── Endereços fixos na construção (mesmo padrão de OfertaCaptacaoFactory.gateway
-    // /registro/moeda — sem setter nesta fase, ver "Pendências conhecidas") ────────
+    // ── Addresses fixed at construction (same pattern as OfertaCaptacaoFactory.gateway
+    // /registro/moeda; no setter in this phase, see "Known open items") ─────────────
     ParticipacaoTokenFactory public immutable tokenFactory;
     EmissaoGateway public immutable emissaoGateway;
     OfertaCaptacaoFactory public immutable captacaoFactory;
 
-    // ── Parâmetros de plataforma, trocáveis via timelock, invisíveis ao emissor ───
+    // ── Platform parameters, swappable via timelock, invisible to the issuer ──────
     address public protocoloWallet;
     uint256 public taxaBps;
     uint256 public tetoPorInvestidor;
 
-    // ── Allowlist de emissores, gerida por AGENTE_ROLE, sem timelock ──────────────
+    // ── Issuer allowlist, managed by AGENTE_ROLE, no timelock ─────────────────────
     mapping(address => bool) public emissoresAutorizados;
 
-    // ── Eventos ────────────────────────────────────────────────────────────────────
+    // ── Events ─────────────────────────────────────────────────────────────────────
     event EmissorAutorizado(address indexed emissor);
     event EmissorRevogado(address indexed emissor);
     event OfertaCompletaCriada(
@@ -282,7 +288,7 @@ contract OfertaOrquestrador is TimelockedAccessControl {
     event TetoPorInvestidorChangeProposed(uint256 novoTeto, uint256 executeAfter);
     event TetoPorInvestidorChanged(uint256 antigo, uint256 novo);
 
-    // ── Erros ──────────────────────────────────────────────────────────────────────
+    // ── Errors ─────────────────────────────────────────────────────────────────────
     error ZeroAddress();
     error EmissorNaoAutorizado(address emissor);
     error PrecoInvalido();
@@ -318,7 +324,7 @@ contract OfertaOrquestrador is TimelockedAccessControl {
         tetoPorInvestidor = tetoPorInvestidor_;
     }
 
-    // ── Allowlist (AGENTE_ROLE, imediato — ver decisão travada) ────────────────────
+    // ── Allowlist (AGENTE_ROLE, immediate; see the locked decision) ────────────────
     function autorizarEmissor(address emissor) external onlyRole(AGENTE_ROLE) {
         if (emissor == address(0)) revert ZeroAddress();
         emissoresAutorizados[emissor] = true;
@@ -330,7 +336,7 @@ contract OfertaOrquestrador is TimelockedAccessControl {
         emit EmissorRevogado(emissor);
     }
 
-    // ── Criação atômica ─────────────────────────────────────────────────────────────
+    // ── Atomic creation ─────────────────────────────────────────────────────────────
     function criarOfertaCompleta(
         string memory nome,
         string memory simbolo,
@@ -366,13 +372,13 @@ contract OfertaOrquestrador is TimelockedAccessControl {
         emit OfertaCompletaCriada(msg.sender, token, oferta, metaMinima, metaMaxima, precoPorCota, prazo);
     }
 
-    // ── Parâmetros de plataforma (DEFAULT_ADMIN_ROLE, timelock) ────────────────────
+    // ── Platform parameters (DEFAULT_ADMIN_ROLE, timelock) ─────────────────────────
     function proposeSetProtocoloWallet(address novo) external onlyRole(DEFAULT_ADMIN_ROLE) returns (uint256);
     function executeSetProtocoloWallet(address novo) external onlyRole(DEFAULT_ADMIN_ROLE);
 
     function proposeSetTaxaBps(uint256 novaTaxaBps) external onlyRole(DEFAULT_ADMIN_ROLE) returns (uint256);
-    // valida TAXA_BPS_MAXIMA tanto no propose quanto no execute (lição já aplicada em
-    // LiquidacaoSecundaria.executeSetTaxaSecundarioBps, ver CLAUDE.md — repetir aqui)
+    // validates TAXA_BPS_MAXIMA in both propose and execute (a lesson already applied in
+    // LiquidacaoSecundaria.executeSetTaxaSecundarioBps, see CLAUDE.md; repeat it here)
     function executeSetTaxaBps(uint256 novaTaxaBps) external onlyRole(DEFAULT_ADMIN_ROLE);
 
     function proposeSetTetoPorInvestidor(uint256 novoTeto) external onlyRole(DEFAULT_ADMIN_ROLE) returns (uint256);
@@ -380,204 +386,210 @@ contract OfertaOrquestrador is TimelockedAccessControl {
 }
 ```
 
-Cada par `proposeX`/`executeX` segue exatamente o padrão já usado em todo o repositório:
-`actionId = keccak256(abi.encode("NOME_DA_ACAO", ...parâmetros))`, `_scheduleAction`/
-`_consumeAction` herdados de `TimelockedAccessControl`.
+Each `proposeX`/`executeX` pair follows exactly the pattern already used throughout the
+repository: `actionId = keccak256(abi.encode("ACTION_NAME", ...params))`, with
+`_scheduleAction`/`_consumeAction` inherited from `TimelockedAccessControl`.
 
-### 2.1 Lista completa de reverts
+### 2.1 Full list of reverts
 
-| Revert | Condição | Onde |
+| Revert | Condition | Where |
 |---|---|---|
-| `ZeroAddress()` | qualquer endereço obrigatório do construtor é `address(0)`; `autorizarEmissor(address(0))` | construtor, `autorizarEmissor` |
-| `TaxaExcedeMaximo(taxaBps_, 100)` | `taxaBps` inicial (construtor) ou proposto (`proposeSetTaxaBps`/`executeSetTaxaBps`) excede 100 bps | construtor, `proposeSetTaxaBps`, `executeSetTaxaBps` |
-| `EmissorNaoAutorizado(msg.sender)` | `criarOfertaCompleta` chamado por endereço fora de `emissoresAutorizados` | `criarOfertaCompleta` |
+| `ZeroAddress()` | any required constructor address is `address(0)`; `autorizarEmissor(address(0))` | constructor, `autorizarEmissor` |
+| `TaxaExcedeMaximo(taxaBps_, 100)` | the initial `taxaBps` (constructor) or a proposed one (`proposeSetTaxaBps`/`executeSetTaxaBps`) exceeds 100 bps | constructor, `proposeSetTaxaBps`, `executeSetTaxaBps` |
+| `EmissorNaoAutorizado(msg.sender)` | `criarOfertaCompleta` called by an address outside `emissoresAutorizados` | `criarOfertaCompleta` |
 | `PrecoInvalido()` | `precoPorCota == 0` | `criarOfertaCompleta` |
 | `PrazoInvalido(prazo)` | `prazo <= block.timestamp` | `criarOfertaCompleta` |
-| `PrazoExcedeLimite(prazo, 180 days)` | `prazo - block.timestamp > 180 dias` | `criarOfertaCompleta` |
+| `PrazoExcedeLimite(prazo, 180 days)` | `prazo - block.timestamp > 180 days` | `criarOfertaCompleta` |
 | `MetaMaximaExcedeTeto(metaMaxima, 15_000_000 ether)` | `metaMaxima > TETO_OFERTA` | `criarOfertaCompleta` |
 | `LoteAdicionalExcedeLimite(metaMaxima, metaMinima)` | `metaMaxima*100 > metaMinima*125` | `criarOfertaCompleta` |
 | `PrecoNaoDivideMetaMaxima(metaMaxima, precoPorCota)` | `metaMaxima % precoPorCota != 0` | `criarOfertaCompleta` |
-| *(bubbled)* `AccessControlUnauthorizedAccount` | orquestrador ainda sem `AGENTE_ROLE` em algum dos 3 contratos-alvo | subchamadas dentro de `criarOfertaCompleta` |
-| *(bubbled)* `MetasInvalidas`/`PrecoInvalido`/`PrazoInvalido`/`TaxaExcedeMaximo` de `OfertaCaptacaoFactory` | `metaMinima == 0`/`metaMinima > metaMaxima` — **deliberadamente não duplicado** no orquestrador, já garantido a jusante | `criarCaptacao`, chamado de dentro de `criarOfertaCompleta` |
-| `ActionAlreadyPending`/`ActionNotPending`/`TimelockNotElapsed`/`InvalidTimelockDelay`/`RoleChangeRequiresTimelock` | herdados de `TimelockedAccessControl`, sem mudança | qualquer `proposeX`/`executeX`, `grantRole`/`revokeRole` |
+| *(bubbled)* `AccessControlUnauthorizedAccount` | the orchestrator does not yet have `AGENTE_ROLE` on one of the 3 target contracts | subcalls inside `criarOfertaCompleta` |
+| *(bubbled)* `OfertaCaptacaoFactory`'s `MetasInvalidas`/`PrecoInvalido`/`PrazoInvalido`/`TaxaExcedeMaximo` | `metaMinima == 0`/`metaMinima > metaMaxima`: **deliberately not duplicated** in the orchestrator, already guaranteed downstream | `criarCaptacao`, called from inside `criarOfertaCompleta` |
+| `ActionAlreadyPending`/`ActionNotPending`/`TimelockNotElapsed`/`InvalidTimelockDelay`/`RoleChangeRequiresTimelock` | inherited from `TimelockedAccessControl`, unchanged | any `proposeX`/`executeX`, `grantRole`/`revokeRole` |
 
 ---
 
-## 3. Sequência de deploy — resumo
+## 3. Deploy sequence: summary
 
-Ver detalhamento completo em §1.3. Resumo em passos:
+See the full detail in §1.3. Summary in steps:
 
-1. Deploy de `OfertaOrquestrador` (após a infra atual já existir).
-2. `propose`/espera 1h/`execute` de `AGENTE_ROLE` em `ParticipacaoTokenFactory`,
-   `EmissaoGateway` e `OfertaCaptacaoFactory` (3 propose + 3 execute, independentes entre si).
-3. `propose`/espera 1h/`execute` de `AGENTE_ROLE` no **próprio** orquestrador, para o operador
-   que vai gerir a allowlist.
-4. `autorizarEmissor(empresa)` por empresa aprovada off-chain — imediato.
-5. Empresa chama `criarOfertaCompleta(...)` da própria carteira.
+1. Deploy `OfertaOrquestrador` (once the current infrastructure exists).
+2. `propose`/wait 1h/`execute` of `AGENTE_ROLE` on `ParticipacaoTokenFactory`,
+   `EmissaoGateway` and `OfertaCaptacaoFactory` (3 propose + 3 execute, independent of each
+   other).
+3. `propose`/wait 1h/`execute` of `AGENTE_ROLE` on the orchestrator **itself**, for the
+   operator who will manage the allowlist.
+4. `autorizarEmissor(company)` for each company approved off-chain: immediate.
+5. The company calls `criarOfertaCompleta(...)` from its own wallet.
 
 ---
 
-## 4. Plano de testes
+## 4. Test plan
 
-Arquivo novo: `test/OfertaOrquestrador.t.sol`. Cobrindo, no mínimo:
+New file: `test/OfertaOrquestrador.t.sol`. Covering, at a minimum:
 
-**Acesso/allowlist**
-- `criarOfertaCompleta` por emissor não autorizado reverte com `EmissorNaoAutorizado`.
-- `autorizarEmissor`/`revogarEmissor` só por `AGENTE_ROLE` (do orquestrador); qualquer outro
-  chamador reverte com o erro padrão do `AccessControl`.
-- Emissor revogado não consegue mais criar ofertas depois da revogação (mesmo tendo criado
-  uma antes).
+**Access/allowlist**
+- `criarOfertaCompleta` by an unauthorized issuer reverts with `EmissorNaoAutorizado`.
+- `autorizarEmissor`/`revogarEmissor` only by `AGENTE_ROLE` (the orchestrator's); any other
+  caller reverts with the standard `AccessControl` error.
+- A revoked issuer can no longer create offerings after the revocation (even if it created
+  one before).
 
-**Limites Res. CVM 88 — boundary exato**
-- `prazo - block.timestamp == 180 days` passa; `== 180 days + 1` reverte com
+**CVM Resolution 88 limits: exact boundary**
+- `prazo - block.timestamp == 180 days` passes; `== 180 days + 1` reverts with
   `PrazoExcedeLimite`.
-- `metaMaxima == TETO_OFERTA` passa; `== TETO_OFERTA + 1` reverte com `MetaMaximaExcedeTeto`.
-- `metaMaxima * 100 == metaMinima * 125` (exatamente 25% de lote adicional) passa;
-  `metaMaxima * 100 == metaMinima * 125 + 1` reverte com `LoteAdicionalExcedeLimite`.
-- `prazo <= block.timestamp` reverte com `PrazoInvalido` (não com `PrazoExcedeLimite`).
+- `metaMaxima == TETO_OFERTA` passes; `== TETO_OFERTA + 1` reverts with
+  `MetaMaximaExcedeTeto`.
+- `metaMaxima * 100 == metaMinima * 125` (exactly a 25% additional lot) passes;
+  `metaMaxima * 100 == metaMinima * 125 + 1` reverts with `LoteAdicionalExcedeLimite`.
+- `prazo <= block.timestamp` reverts with `PrazoInvalido` (not with `PrazoExcedeLimite`).
 
-**Aritmética/derivação**
-- `metaMaxima % precoPorCota != 0` reverte com `PrecoNaoDivideMetaMaxima` (inclusive
-  `precoPorCota == 0`, que deve reverter com `PrecoInvalido` **antes** de qualquer módulo —
-  ver "Observações abertas").
-- Token resultante tem `cotasAutorizadas() == (metaMaxima/precoPorCota) * 1 ether` exatamente.
+**Arithmetic/derivation**
+- `metaMaxima % precoPorCota != 0` reverts with `PrecoNaoDivideMetaMaxima` (including
+  `precoPorCota == 0`, which must revert with `PrecoInvalido` **before** any modulo; see
+  "Open observations").
+- The resulting token has `cotasAutorizadas() == (metaMaxima/precoPorCota) * 1 ether`
+  exactly.
 
-**Anti-manipulação**
-- `OfertaCaptacao.emissorWallet() == msg.sender`, sempre — mesmo simulando o "emissor" como um
-  contrato intermediário chamando por conta própria (o valor gravado é sempre quem chamou
-  `criarOfertaCompleta` por último, nunca repassável).
-- `OfertaCaptacao.taxaBps()`, `.protocoloWallet()`, `.tetoPorInvestidor()` batem exatamente com
-  o storage do orquestrador **no momento da chamada**, inclusive quando esses valores tiverem
-  sido alterados por `executeSetX` entre duas criações consecutivas (a segunda oferta reflete
-  o valor novo, a primeira mantém o valor antigo — mesmo padrão de "trocas só afetam o
-  futuro" já usado em `ParticipacaoTokenFactory.implementacao`).
+**Anti-manipulation**
+- `OfertaCaptacao.emissorWallet() == msg.sender`, always, even when simulating the "issuer"
+  as an intermediate contract calling on its own behalf (the stored value is always whoever
+  last called `criarOfertaCompleta`, never relayable).
+- `OfertaCaptacao.taxaBps()`, `.protocoloWallet()`, `.tetoPorInvestidor()` match the
+  orchestrator's storage **at the time of the call** exactly, including when those values
+  were changed by `executeSetX` between two consecutive creations (the second offering
+  reflects the new value, the first keeps the old one: the same "changes only affect the
+  future" pattern already used in `ParticipacaoTokenFactory.implementacao`).
 
-**Atomicidade**
-- Forçar falha na 4ª subchamada (`registrarCaptacao`) — via um `EmissaoGateway` de teste que
-  reverte só nessa função — e confirmar que nem `tokenFactory.isOferta(token)` nem
-  `captacaoFactory.isCaptacao(oferta)` ficam `true`, e que nenhum evento
-  `OfertaCompletaCriada`/`OfertaCriada`/`CaptacaoCriada` é emitido.
-- `criarOfertaCompleta` chamado antes de o orquestrador ter `AGENTE_ROLE` nos 3 contratos
-  reverte limpo (erro padrão do `AccessControl`), sem estado parcial.
+**Atomicity**
+- Force a failure in the 4th subcall (`registrarCaptacao`), via a test `EmissaoGateway` that
+  reverts only in that function, and confirm that neither `tokenFactory.isOferta(token)` nor
+  `captacaoFactory.isCaptacao(oferta)` ends up `true`, and that no
+  `OfertaCompletaCriada`/`OfertaCriada`/`CaptacaoCriada` event is emitted.
+- `criarOfertaCompleta` called before the orchestrator has `AGENTE_ROLE` on all 3 contracts
+  reverts cleanly (standard `AccessControl` error), with no partial state.
 
-**Ciclo completo (integração)**
-- Emissor autorizado cria oferta → investidor aporta (até `metaMaxima`) → `encerrar()` →
-  `resgatarCotas()` → cotas mintadas batem com o aportado, exatamente como no fluxo manual já
-  testado em `OfertaCaptacao.t.sol`.
+**Full cycle (integration)**
+- An authorized issuer creates an offering → an investor invests (up to `metaMaxima`) →
+  `encerrar()` → `resgatarCotas()` → the minted shares match what was invested, exactly as in
+  the manual flow already tested in `OfertaCaptacao.t.sol`.
 
-**Governança dos parâmetros de plataforma**
-- `proposeSetTaxaBps`/`executeSetTaxaBps` só por `DEFAULT_ADMIN_ROLE`; ambos revertem se
-  `> TAXA_BPS_MAXIMA` (teste chamando `executeSetTaxaBps` diretamente, sem `propose`, com valor
-  acima do teto — mesma lição já registrada no `CLAUDE.md` para
+**Governance of platform parameters**
+- `proposeSetTaxaBps`/`executeSetTaxaBps` only by `DEFAULT_ADMIN_ROLE`; both revert if
+  `> TAXA_BPS_MAXIMA` (a test calls `executeSetTaxaBps` directly, without `propose`, with a
+  value above the cap: the same lesson already recorded in `CLAUDE.md` for
   `LiquidacaoSecundaria.executeSetTaxaSecundarioBps`).
-- Mesma cobertura para `proposeSetProtocoloWallet`/`executeSetProtocoloWallet` (rejeita
-  `address(0)`) e `proposeSetTetoPorInvestidor`/`executeSetTetoPorInvestidor`.
+- The same coverage for `proposeSetProtocoloWallet`/`executeSetProtocoloWallet` (rejects
+  `address(0)`) and `proposeSetTetoPorInvestidor`/`executeSetTetoPorInvestidor`.
 
 ---
 
-## 5. Plano de fuzzing stateful
+## 5. Stateful fuzzing plan
 
-Arquivo novo: `test/invariant/HandlerOrquestrador.sol` + `test/InvariantOrquestrador.t.sol`,
-mesmo desenho dos handlers existentes (`actors` = mistura de emissores autorizados e não
-autorizados; `agente` = titular de `AGENTE_ROLE` no orquestrador; `_chaos` ~1 em 5 toma o
-caminho inválido). Ações do handler:
+New files: `test/invariant/HandlerOrquestrador.sol` + `test/InvariantOrquestrador.t.sol`,
+with the same design as the existing handlers (`actors` = a mix of authorized and
+unauthorized issuers; `agent` = the holder of `AGENTE_ROLE` on the orchestrator; `_chaos`
+takes the invalid path ~1 in 5 times). Handler actions:
 
-- `autorizarEmissor`/`revogarEmissor` (chaos: chamador sem `AGENTE_ROLE`).
-- `criarOfertaCompleta` com parâmetros `bound()`ados dentro dos limites válidos na maior parte
-  das chamadas; no caminho `_chaos`, um dos seguintes é violado de propósito: prazo > 180 dias,
-  `metaMaxima` > teto, lote adicional > 25%, `metaMaxima` não múltiplo de `precoPorCota`, ou
-  chamador não autorizado.
+- `autorizarEmissor`/`revogarEmissor` (chaos: a caller without `AGENTE_ROLE`).
+- `criarOfertaCompleta` with parameters `bound()`ed within the valid limits for most calls;
+  on the `_chaos` path, one of the following is violated on purpose: deadline > 180 days,
+  `metaMaxima` > cap, additional lot > 25%, `metaMaxima` not a multiple of `precoPorCota`, or
+  an unauthorized caller.
 - `proposeSetTaxaBps`/`executeSetTaxaBps`, `proposeSetProtocoloWallet`/
   `executeSetProtocoloWallet`, `proposeSetTetoPorInvestidor`/`executeSetTetoPorInvestidor`
-  (chaos: chamador sem `DEFAULT_ADMIN_ROLE`; `taxaBps` acima do teto).
+  (chaos: a caller without `DEFAULT_ADMIN_ROLE`; `taxaBps` above the cap).
 
-Não há ação de handler para "tentar influenciar `taxaBps`/`protocoloWallet`/`emissorWallet`
-via `criarOfertaCompleta`" — a ABI da função nem aceita esses parâmetros, então essa invariante
-vale por construção, não por teste dinâmico; mencionado explicitamente no relatório de
-cobertura em vez de forçar uma ação de handler artificial.
+There is no handler action for "try to influence `taxaBps`/`protocoloWallet`/`emissorWallet`
+via `criarOfertaCompleta`": the function's ABI does not even accept those parameters, so this
+invariant holds by construction, not by dynamic testing. It is mentioned explicitly in the
+coverage report instead of forcing an artificial handler action.
 
-**Invariantes (texto)**:
+**Invariants (text)**:
 
-1. Para toda oferta criada via orquestrador: `token.totalSupply() <= token.cotasAutorizadas()`
-   (a invariante geral da Fase 1, verificada especificamente no caminho novo).
-2. Para toda oferta criada via orquestrador: `metaMaxima <= TETO_OFERTA`,
-   `prazo - <timestamp de criação, no espelho do handler> <= 180 dias`, e
-   `metaMaxima*100 <= metaMinima*125` — nenhuma oferta viva viola os limites CVM 88 codificados
-   no orquestrador.
-3. Para toda oferta criada via orquestrador: `oferta.emissorWallet()` é sempre o endereço que
-   chamou `criarOfertaCompleta` para aquela oferta específica (espelhado pelo handler).
-4. Para toda oferta criada via orquestrador: `oferta.taxaBps()`, `.protocoloWallet()` e
-   `.tetoPorInvestidor()` batem com o valor do storage do orquestrador no instante exato da
-   criação (espelho `ghost_*` atualizado a cada `executeSetX` bem-sucedido) — nunca divergem.
-5. Nenhuma chamada de `criarOfertaCompleta` por um endereço fora de `emissoresAutorizados` (no
-   momento da chamada) jamais teve sucesso.
-6. Nenhuma chamada sem `AGENTE_ROLE` (do orquestrador) a `autorizarEmissor`/`revogarEmissor`,
-   nem sem `DEFAULT_ADMIN_ROLE` a `proposeSetTaxaBps`/`proposeSetProtocoloWallet`/
-   `proposeSetTetoPorInvestidor`, jamais teve sucesso.
-7. `taxaBps` do orquestrador nunca excedeu `TAXA_BPS_MAXIMA` (100) em nenhum momento da
-   sequência (mesmo padrão da invariante 6 da Fase 4, aplicada aqui a um segundo contrato com
-   teto de taxa independente).
+1. For every offering created via the orchestrator:
+   `token.totalSupply() <= token.cotasAutorizadas()` (Phase 1's general invariant, checked
+   specifically on the new path).
+2. For every offering created via the orchestrator: `metaMaxima <= TETO_OFERTA`,
+   `prazo - <creation timestamp, in the handler's mirror> <= 180 days`, and
+   `metaMaxima*100 <= metaMinima*125`: no live offering violates the CVM 88 limits encoded
+   in the orchestrator.
+3. For every offering created via the orchestrator: `oferta.emissorWallet()` is always the
+   address that called `criarOfertaCompleta` for that specific offering (mirrored by the
+   handler).
+4. For every offering created via the orchestrator: `oferta.taxaBps()`,
+   `.protocoloWallet()` and `.tetoPorInvestidor()` match the value in the orchestrator's
+   storage at the exact moment of creation (a `ghost_*` mirror updated on each successful
+   `executeSetX`); they never diverge.
+5. No call to `criarOfertaCompleta` by an address outside `emissoresAutorizados` (at the time
+   of the call) ever succeeded.
+6. No call without `AGENTE_ROLE` (on the orchestrator) to `autorizarEmissor`/
+   `revogarEmissor`, nor without `DEFAULT_ADMIN_ROLE` to `proposeSetTaxaBps`/
+   `proposeSetProtocoloWallet`/`proposeSetTetoPorInvestidor`, ever succeeded.
+7. The orchestrator's `taxaBps` never exceeded `TAXA_BPS_MAXIMA` (100) at any point in the
+   sequence (same pattern as Phase 4's invariant 6, applied here to a second contract with
+   an independent fee cap).
 
-Escala: mesma configuração do `foundry.toml` já em uso (`runs=256 * depth=100` = 25.600
-chamadas por rodada), sem necessidade de mudar o perfil global.
-
----
-
-## 6. Cobertura
-
-Meta: **100% linha/statement/branch/função** em `OfertaOrquestrador.sol`, mesma barra das
-Fases 1–4. Nenhuma branch nova deveria cair na mesma categoria de "limitação conhecida do
-instrumentador" documentada para `DenyAllTransferPolicy` — todas as branches aqui são
-condicionais normais (`if`/`revert`), não funções `pure` de retorno literal.
+Scale: the same `foundry.toml` configuration already in use (`runs=256 * depth=100` = 25,600
+calls per run), with no need to change the global profile.
 
 ---
 
-## 7. Atualizações necessárias no `CLAUDE.md` (quando a implementação for liberada)
+## 6. Coverage
 
-- Nova seção "Arquitetura da Fase N — `OfertaOrquestrador`" (numeração a definir — hoje Fase 5
-  é "categorias adicionais" e Fase 6 está em andamento; este trabalho provavelmente vira uma
-  Fase 7, mas isso é só rotulagem, não decisão técnica).
-- Nova entrada em "Decisões travadas" registrando: allowlist sem timelock (com o racional já
-  dado no prompt), `cotasAutorizadas` derivada, e a decisão de **não** tocar `EMISSOR_ROLE`
-  (com a razão de incompatibilidade de timelock, ver §1.4).
-- Nova linha na tabela de "Separação timelock × operacional": `criarOfertaCompleta` e
-  `autorizarEmissor`/`revogarEmissor` → operacional/imediato; `setTaxaBps`/
+Target: **100% line/statement/branch/function** on `OfertaOrquestrador.sol`, the same bar as
+Phases 1–4. No new branch should fall into the same "known instrumenter limitation" category
+documented for `DenyAllTransferPolicy`: all branches here are normal conditionals
+(`if`/`revert`), not `pure` functions returning a literal.
+
+---
+
+## 7. Required `CLAUDE.md` updates (once implementation is approved)
+
+- A new section "Phase N architecture — `OfertaOrquestrador`" (numbering to be decided: today
+  Phase 5 is "additional categories" and Phase 6 is in progress; this work will probably
+  become a Phase 7, but that is only labeling, not a technical decision).
+- A new entry in "Locked decisions" recording: allowlist without a timelock (with the
+  rationale already given in the prompt), derived `cotasAutorizadas`, and the decision
+  **not** to touch `EMISSOR_ROLE` (with the timelock-incompatibility reason, see §1.4).
+- A new row in the "Timelock × operational split" table: `criarOfertaCompleta` and
+  `autorizarEmissor`/`revogarEmissor` → operational/immediate; `setTaxaBps`/
   `setProtocoloWallet`/`setTetoPorInvestidor` → timelock.
-- Nota explícita, honesta, no NatSpec do contrato e no `CLAUDE.md`: o teto anual cruzado entre
-  plataformas da Res. CVM 88 (R$ 20 mil por investidor de varejo) continua **inteiramente
-  off-chain e autodeclaratório** — `OfertaOrquestrador` não adiciona nenhuma garantia nova
-  sobre isso, só automatiza a criação da oferta em si.
-- Atualizar "Pendências conhecidas": `OfertaOrquestrador.tokenFactory`/`emissaoGateway`/
-  `captacaoFactory` são `immutable`, sem setter nesta fase (mesmo padrão já registrado para
-  `OfertaCaptacaoFactory.gateway`/`registro`/`moeda`).
+- An explicit, honest note in the contract's NatSpec and in `CLAUDE.md`: CVM Resolution 88's
+  annual cap across platforms (R$ 20,000 per retail investor) remains **entirely off-chain
+  and self-declared**; `OfertaOrquestrador` adds no new guarantee about it, it only automates
+  the creation of the offering itself.
+- Update "Known open items": `OfertaOrquestrador.tokenFactory`/`emissaoGateway`/
+  `captacaoFactory` are `immutable`, with no setter in this phase (the same pattern already
+  recorded for `OfertaCaptacaoFactory.gateway`/`registro`/`moeda`).
 
 ---
 
-## 8. Observações abertas (não são decisões travadas quebradas — são lacunas a preencher)
+## 8. Open observations (not broken locked decisions; gaps to fill)
 
-1. **`precoPorCota == 0` antes do módulo.** As decisões travadas descrevem
-   `metaMaxima % precoPorCota != 0` como revert, mas não mencionam o caso `precoPorCota == 0`
-   explicitamente. Em Solidity puro isso seria `Panic(0x12)` (divisão/módulo por zero) em vez
-   de um erro customizado — quebra a convenção deste repositório de nunca deixar um revert
-   "cru" acontecer. O plano acima já inclui `if (precoPorCota == 0) revert PrecoInvalido();`
-   antes do módulo, reaproveitando o mesmo nome de erro já usado em `OfertaCaptacaoFactory`.
-   Confirmar se concorda com essa adição antes da implementação.
-2. **Pausa de emergência do orquestrador.** Diferente de `ParticipacaoTokenFactory`/
-   `OfertaCaptacaoFactory` (ambas `Pausable`, `AGENTE_ROLE`), o desenho travado não menciona
-   um `pause()` no `OfertaOrquestrador`. Vale notar que uma pausa **transitiva** já existe: se
-   `ParticipacaoTokenFactory.pause()` ou `OfertaCaptacaoFactory.pause()` forem acionadas (já
-   `AGENTE_ROLE`, imediatas, hoje), `criarOfertaCompleta` reverte automaticamente na
-   subchamada correspondente — então uma emergência já tem um botão, só que "emprestado" de
-   contratos que também afetam o caminho manual do AGENTE. Perguntar se isso é suficiente ou
-   se você quer um `pause()` dedicado só para o canal self-service (não incluído no desenho
-   acima, para não expandir escopo silenciosamente).
-3. **Um emissor pode criar múltiplas ofertas.** `emissoresAutorizados` é uma permissão
-   booleana, não um contador nem um limite de "uma oferta por vez" — uma empresa autorizada
-   pode chamar `criarOfertaCompleta` quantas vezes quiser enquanto estiver na allowlist. As
-   decisões travadas não impõem restrição alguma aqui; sinalizando só para confirmar que é
-   comportamento pretendido (parece razoável — uma empresa pode legitimamente ter mais de uma
-   série/rodada — mas registro a suposição).
+1. **`precoPorCota == 0` before the modulo.** The locked decisions describe
+   `metaMaxima % precoPorCota != 0` as a revert, but do not mention the `precoPorCota == 0`
+   case explicitly. In plain Solidity that would be `Panic(0x12)` (division/modulo by zero)
+   instead of a custom error, which breaks this repository's convention of never letting a
+   "raw" revert happen. The plan above already includes
+   `if (precoPorCota == 0) revert PrecoInvalido();` before the modulo, reusing the same error
+   name already used in `OfertaCaptacaoFactory`. Confirm you agree with this addition before
+   implementation.
+2. **Emergency pause for the orchestrator.** Unlike `ParticipacaoTokenFactory`/
+   `OfertaCaptacaoFactory` (both `Pausable`, `AGENTE_ROLE`), the locked design does not
+   mention a `pause()` on `OfertaOrquestrador`. Note that a **transitive** pause already
+   exists: if `ParticipacaoTokenFactory.pause()` or `OfertaCaptacaoFactory.pause()` is
+   triggered (already `AGENTE_ROLE` and immediate today), `criarOfertaCompleta` automatically
+   reverts on the corresponding subcall. So an emergency already has a button, only one
+   "borrowed" from contracts that also affect the AGENT's manual path. Ask whether that is
+   enough or whether you want a dedicated `pause()` just for the self-service channel (not
+   included in the design above, so as not to expand scope silently).
+3. **An issuer can create multiple offerings.** `emissoresAutorizados` is a boolean
+   permission, not a counter or a "one offering at a time" limit: an authorized company can
+   call `criarOfertaCompleta` as many times as it wants while it is on the allowlist. The
+   locked decisions impose no restriction here; flagged only to confirm it is intended
+   behavior (it seems reasonable, since a company can legitimately have more than one
+   series/round, but I am recording the assumption).
 
-Nenhuma dessas três observações contradiz uma decisão travada; são pontos que o texto do
-problema simplesmente não especificou. Recomendo decidir os três antes de eu escrever
-qualquer `.sol`.
+None of these three observations contradicts a locked decision; they are points the problem
+statement simply did not specify. I recommend deciding all three before I write any `.sol`.

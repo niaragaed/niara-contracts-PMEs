@@ -10,29 +10,28 @@ import {LiquidacaoSecundaria} from "../src/secundario/LiquidacaoSecundaria.sol";
 import {MockBRL} from "../src/mocks/MockBRL.sol";
 import {HandlerSecundario} from "./invariant/HandlerSecundario.sol";
 
-/// @notice Testes de invariante com fuzzing stateful do domínio da liquidação secundária (Fase
-/// 4): o `HandlerSecundario` executa sequências aleatórias de criarToken/mintarCotas/
+/// @notice Stateful fuzzing invariant tests for the secondary-settlement domain (Phase 4): the
+/// `HandlerSecundario` runs random sequences of criarToken/mintarCotas/
 /// mintarMoeda/aprovarCotas/aprovarMoeda/definirElegivel/definirLockup/abrirSecundario/
-/// avancarTempo/tentarLiquidarCessao/ajustarTaxa, e as funções abaixo verificam conservação,
-/// atomicidade e as guardas de acesso/política a cada chamada. Mesma escala das fases
-/// anteriores: `runs=256 * depth=100` = 25.600 chamadas por invariante (ver `[invariant]` em
-/// foundry.toml).
+/// avancarTempo/tentarLiquidarCessao/ajustarTaxa, and the functions below check conservation,
+/// atomicity and the access/policy guards on every call. Same scale as the earlier phases:
+/// `runs=256 * depth=100` = 25,600 calls per invariant (see `[invariant]` in foundry.toml).
 ///
-/// A factory desta suíte é implantada com a `RestrictedTransferPolicy` compartilhada como
-/// `transferPolicyPadrao` (em vez de `DenyAllTransferPolicy`) — o mecanismo de TROCAR a política
-/// de um token já vivo já foi provado exaustivamente em `InvariantPoliticaTest` (Fase 3); aqui o
-/// foco é o dinheiro e o gate, não o mecanismo de troca em si.
+/// This suite's factory is deployed with the shared `RestrictedTransferPolicy` as
+/// `transferPolicyPadrao` (instead of `DenyAllTransferPolicy`): the mechanism for SWAPPING an
+/// already-live token's policy was already proven exhaustively in `InvariantPoliticaTest`
+/// (Phase 3); here the focus is the money and the gate, not the swap mechanism itself.
 contract InvariantSecundarioTest is Test {
     ParticipacaoTokenFactory public factory;
-    ParticipacaoToken public tokenImplementacao;
+    ParticipacaoToken public tokenImplementation;
     EmissaoGateway public gateway;
     RestrictedTransferPolicy public policy;
     MockBRL public moeda;
-    LiquidacaoSecundaria public liquidacao;
+    LiquidacaoSecundaria public settlement;
     HandlerSecundario public handler;
 
     address public admin = makeAddr("adminSecundario");
-    address public agente = makeAddr("agenteSecundario");
+    address public agent = makeAddr("agenteSecundario");
     address public protocoloWallet = makeAddr("protocoloWalletSecundario");
 
     uint256 public constant TIMELOCK_DELAY = 1 hours;
@@ -46,18 +45,18 @@ contract InvariantSecundarioTest is Test {
     function _deployContracts() internal {
         gateway = new EmissaoGateway(admin, TIMELOCK_DELAY);
         policy = new RestrictedTransferPolicy(admin, TIMELOCK_DELAY);
-        tokenImplementacao = new ParticipacaoToken();
+        tokenImplementation = new ParticipacaoToken();
         factory =
-            new ParticipacaoTokenFactory(admin, address(tokenImplementacao), address(gateway), address(policy), TIMELOCK_DELAY);
+            new ParticipacaoTokenFactory(admin, address(tokenImplementation), address(gateway), address(policy), TIMELOCK_DELAY);
         moeda = new MockBRL();
-        liquidacao = new LiquidacaoSecundaria(admin, address(moeda), address(factory), protocoloWallet, TIMELOCK_DELAY);
+        settlement = new LiquidacaoSecundaria(admin, address(moeda), address(factory), protocoloWallet, TIMELOCK_DELAY);
     }
 
     function _wireRoles() internal {
-        _grantRoleOn(address(gateway), gateway.AGENTE_ROLE(), agente);
-        _grantRoleOn(address(factory), factory.AGENTE_ROLE(), agente);
-        _grantRoleOn(address(policy), policy.AGENTE_ROLE(), agente);
-        _grantRoleOn(address(liquidacao), liquidacao.AGENTE_ROLE(), agente);
+        _grantRoleOn(address(gateway), gateway.AGENTE_ROLE(), agent);
+        _grantRoleOn(address(factory), factory.AGENTE_ROLE(), agent);
+        _grantRoleOn(address(policy), policy.AGENTE_ROLE(), agent);
+        _grantRoleOn(address(settlement), settlement.AGENTE_ROLE(), agent);
     }
 
     function _deployHandler() internal {
@@ -72,15 +71,15 @@ contract InvariantSecundarioTest is Test {
                 factory: factory,
                 gateway: gateway,
                 policy: policy,
-                moeda: moeda,
-                liquidacao: liquidacao,
+                currency: moeda,
+                settlement: settlement,
                 admin: admin,
-                agente: agente,
+                agent: agent,
                 actors: actors
             })
         );
 
-        handler.criarToken(0);
+        handler.createToken(0);
 
         targetContract(address(handler));
         targetSelector(FuzzSelector({addr: address(handler), selectors: _handlerSelectors()}));
@@ -88,17 +87,17 @@ contract InvariantSecundarioTest is Test {
 
     function _handlerSelectors() internal pure returns (bytes4[] memory selectors) {
         selectors = new bytes4[](11);
-        selectors[0] = HandlerSecundario.criarToken.selector;
-        selectors[1] = HandlerSecundario.mintarCotas.selector;
-        selectors[2] = HandlerSecundario.mintarMoeda.selector;
-        selectors[3] = HandlerSecundario.aprovarCotas.selector;
-        selectors[4] = HandlerSecundario.aprovarMoeda.selector;
+        selectors[0] = HandlerSecundario.createToken.selector;
+        selectors[1] = HandlerSecundario.mintSharesTo.selector;
+        selectors[2] = HandlerSecundario.mintCurrency.selector;
+        selectors[3] = HandlerSecundario.approveShares.selector;
+        selectors[4] = HandlerSecundario.approveCurrency.selector;
         selectors[5] = HandlerSecundario.definirElegivel.selector;
         selectors[6] = HandlerSecundario.definirLockup.selector;
-        selectors[7] = HandlerSecundario.abrirSecundario.selector;
-        selectors[8] = HandlerSecundario.avancarTempo.selector;
-        selectors[9] = HandlerSecundario.tentarLiquidarCessao.selector;
-        selectors[10] = HandlerSecundario.ajustarTaxa.selector;
+        selectors[7] = HandlerSecundario.openSecondary.selector;
+        selectors[8] = HandlerSecundario.advanceTime.selector;
+        selectors[9] = HandlerSecundario.trySettleAssignment.selector;
+        selectors[10] = HandlerSecundario.adjustFee.selector;
     }
 
     function _grantRoleOn(address target, bytes32 role, address account) internal {
@@ -111,17 +110,17 @@ contract InvariantSecundarioTest is Test {
         require(ok2, "execute failed");
     }
 
-    // ── Invariante central: conservação de MockBRL e de cotas, para todo ator e todo token —
-    // prova, ao mesmo tempo, atomicidade (nenhum saldo se move fora de uma liquidação
-    // confirmada bem-sucedida) ────────────────────────────────────────────────────────────
+    // ── Core invariant: conservation of MockBRL and of shares, for every actor and every token,
+    // which also proves atomicity (no balance moves outside a confirmed successful
+    // settlement) ─────────────────────────────────────────────────────────────────────────
 
     function invariant_ConservacaoDeMoeda() public view {
         uint256 nActors = handler.numActors();
         for (uint256 i = 0; i < nActors; i++) {
             address actor = handler.actors(i);
-            assertEq(moeda.balanceOf(actor), handler.ghost_moedaEsperada(actor));
+            assertEq(moeda.balanceOf(actor), handler.ghost_expectedCurrency(actor));
         }
-        assertEq(moeda.balanceOf(protocoloWallet), handler.ghost_moedaEsperada(protocoloWallet));
+        assertEq(moeda.balanceOf(protocoloWallet), handler.ghost_expectedCurrency(protocoloWallet));
     }
 
     function invariant_ConservacaoDeCotas() public view {
@@ -131,12 +130,12 @@ contract InvariantSecundarioTest is Test {
             address token = handler.tokens(i);
             for (uint256 j = 0; j < nActors; j++) {
                 address actor = handler.actors(j);
-                assertEq(ParticipacaoToken(token).balanceOf(actor), handler.ghost_cotasEsperadas(token, actor));
+                assertEq(ParticipacaoToken(token).balanceOf(actor), handler.ghost_expectedShares(token, actor));
             }
         }
     }
 
-    // ── Gate da política nunca contornado ──────────────────────────────────────────────
+    // ── Policy gate never bypassed ──────────────────────────────────────────────────────
 
     function invariant_NoPolicyGateBypassEverSucceeded() public view {
         assertFalse(handler.ghost_policyGateBypassSucceeded());
@@ -152,10 +151,10 @@ contract InvariantSecundarioTest is Test {
         assertFalse(handler.ghost_unauthorizedGovernanceCallSucceeded());
     }
 
-    // ── Teto de taxa nunca excedido ─────────────────────────────────────────────────────
+    // ── Fee cap never exceeded ──────────────────────────────────────────────────────────
 
-    function invariant_TaxaNuncaExcedeuOTeto() public view {
-        assertFalse(handler.ghost_taxaExcedeuTetoSucceeded());
-        assertLe(liquidacao.taxaSecundarioBps(), liquidacao.TAXA_BPS_MAXIMA());
+    function invariant_FeeNeverExceededCap() public view {
+        assertFalse(handler.ghost_feeExceededCapSucceeded());
+        assertLe(settlement.taxaSecundarioBps(), settlement.TAXA_BPS_MAXIMA());
     }
 }

@@ -20,20 +20,20 @@ contract OfertaCaptacaoTest is Test {
     ParticipacaoToken public token;
 
     address public admin = makeAddr("admin");
-    address public agente = makeAddr("agente");
-    address public estranho = makeAddr("estranho");
+    address public agent = makeAddr("agente");
+    address public stranger = makeAddr("estranho");
     address public emissorWallet = makeAddr("emissorWallet");
     address public protocoloWallet = makeAddr("protocoloWallet");
-    address public investidor1 = makeAddr("investidor1");
-    address public investidor2 = makeAddr("investidor2");
+    address public investor1 = makeAddr("investidor1");
+    address public investor2 = makeAddr("investidor2");
 
     uint256 public constant TIMELOCK_DELAY = 1 hours;
 
-    uint256 public constant META_MINIMA = 10_000 ether;
-    uint256 public constant META_MAXIMA = 50_000 ether;
-    uint256 public constant PRECO_POR_COTA = 100 ether;
-    uint256 public constant TETO_POR_INVESTIDOR = 20_000 ether;
-    uint256 public constant TAXA_BPS = 50; // 0.5%
+    uint256 public constant MIN_TARGET = 10_000 ether;
+    uint256 public constant MAX_TARGET = 50_000 ether;
+    uint256 public constant PRICE_PER_SHARE = 100 ether;
+    uint256 public constant PER_INVESTOR_CAP = 20_000 ether;
+    uint256 public constant FEE_BPS = 50; // 0.5%
     uint256 public prazo;
 
     function setUp() public {
@@ -41,16 +41,16 @@ contract OfertaCaptacaoTest is Test {
         registro = new RegistroInvestidorQualificado(admin, TIMELOCK_DELAY);
         moeda = new MockBRL();
 
-        _grantRole(address(gateway), gateway.AGENTE_ROLE(), agente);
-        _grantRole(address(registro), registro.AGENTE_ROLE(), agente);
+        _grantRole(address(gateway), gateway.AGENTE_ROLE(), agent);
+        _grantRole(address(registro), registro.AGENTE_ROLE(), agent);
 
         DenyAllTransferPolicy policy = new DenyAllTransferPolicy();
         ParticipacaoToken tokenImpl = new ParticipacaoToken();
         token = ParticipacaoToken(Clones.clone(address(tokenImpl)));
         token.initialize("Oferta X", "nX", address(gateway), address(policy), "Empresa X", bytes32(0), "2026-A");
 
-        vm.prank(agente);
-        gateway.atestarCotas(address(token), (META_MAXIMA / PRECO_POR_COTA) * 1 ether);
+        vm.prank(agent);
+        gateway.atestarCotas(address(token), (MAX_TARGET / PRICE_PER_SHARE) * 1 ether);
 
         prazo = block.timestamp + 30 days;
 
@@ -64,23 +64,23 @@ contract OfertaCaptacaoTest is Test {
                 moeda: address(moeda),
                 emissorWallet: emissorWallet,
                 protocoloWallet: protocoloWallet,
-                metaMinima: META_MINIMA,
-                metaMaxima: META_MAXIMA,
-                precoPorCota: PRECO_POR_COTA,
+                metaMinima: MIN_TARGET,
+                metaMaxima: MAX_TARGET,
+                precoPorCota: PRICE_PER_SHARE,
                 prazo: prazo,
-                tetoPorInvestidor: TETO_POR_INVESTIDOR,
-                taxaBps: TAXA_BPS
+                tetoPorInvestidor: PER_INVESTOR_CAP,
+                taxaBps: FEE_BPS
             })
         );
 
-        vm.prank(agente);
+        vm.prank(agent);
         gateway.registrarCaptacao(address(token), address(oferta));
 
-        moeda.mint(investidor1, 1_000_000 ether);
-        moeda.mint(investidor2, 1_000_000 ether);
-        vm.prank(investidor1);
+        moeda.mint(investor1, 1_000_000 ether);
+        moeda.mint(investor2, 1_000_000 ether);
+        vm.prank(investor1);
         moeda.approve(address(oferta), type(uint256).max);
-        vm.prank(investidor2);
+        vm.prank(investor2);
         moeda.approve(address(oferta), type(uint256).max);
     }
 
@@ -102,12 +102,12 @@ contract OfertaCaptacaoTest is Test {
             moeda: address(moeda),
             emissorWallet: emissorWallet,
             protocoloWallet: protocoloWallet,
-            metaMinima: META_MINIMA,
-            metaMaxima: META_MAXIMA,
-            precoPorCota: PRECO_POR_COTA,
+            metaMinima: MIN_TARGET,
+            metaMaxima: MAX_TARGET,
+            precoPorCota: PRICE_PER_SHARE,
             prazo: prazo,
-            tetoPorInvestidor: TETO_POR_INVESTIDOR,
-            taxaBps: TAXA_BPS
+            tetoPorInvestidor: PER_INVESTOR_CAP,
+            taxaBps: FEE_BPS
         });
     }
 
@@ -134,19 +134,19 @@ contract OfertaCaptacaoTest is Test {
         clone.initialize(p);
     }
 
-    function test_Initialize_RevertsForMetaMinimaZero() public {
+    function test_Initialize_RevertsForZeroMinTarget() public {
         OfertaCaptacao clone = _newClone();
         IOfertaCaptacao.InitParams memory p = _defaultParams();
         p.metaMinima = 0;
-        vm.expectRevert(abi.encodeWithSelector(OfertaCaptacao.MetasInvalidas.selector, 0, META_MAXIMA));
+        vm.expectRevert(abi.encodeWithSelector(OfertaCaptacao.MetasInvalidas.selector, 0, MAX_TARGET));
         clone.initialize(p);
     }
 
-    function test_Initialize_RevertsForMetaMinimaAboveMaxima() public {
+    function test_Initialize_RevertsForMinTargetAboveMax() public {
         OfertaCaptacao clone = _newClone();
         IOfertaCaptacao.InitParams memory p = _defaultParams();
-        p.metaMinima = META_MAXIMA + 1;
-        vm.expectRevert(abi.encodeWithSelector(OfertaCaptacao.MetasInvalidas.selector, META_MAXIMA + 1, META_MAXIMA));
+        p.metaMinima = MAX_TARGET + 1;
+        vm.expectRevert(abi.encodeWithSelector(OfertaCaptacao.MetasInvalidas.selector, MAX_TARGET + 1, MAX_TARGET));
         clone.initialize(p);
     }
 
@@ -158,7 +158,7 @@ contract OfertaCaptacaoTest is Test {
         clone.initialize(p);
     }
 
-    function test_Initialize_RevertsForPastPrazo() public {
+    function test_Initialize_RevertsForPastDeadline() public {
         OfertaCaptacao clone = _newClone();
         IOfertaCaptacao.InitParams memory p = _defaultParams();
         p.prazo = block.timestamp;
@@ -182,66 +182,66 @@ contract OfertaCaptacaoTest is Test {
     // ── aportar ─────────────────────────────────────────────────────────────────────────
 
     function test_Aportar_UpdatesStateAndTransfersFunds() public {
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.aportar(1_000 ether);
 
         assertEq(oferta.totalArrecadado(), 1_000 ether);
-        assertEq(oferta.aportadoPor(investidor1), 1_000 ether);
+        assertEq(oferta.aportadoPor(investor1), 1_000 ether);
         assertEq(moeda.balanceOf(address(oferta)), 1_000 ether);
     }
 
     function test_Aportar_EmitsEvent() public {
         vm.expectEmit(true, true, true, true, address(oferta));
-        emit OfertaCaptacao.Aporte(investidor1, 1_000 ether, 1_000 ether);
-        vm.prank(investidor1);
+        emit OfertaCaptacao.Aporte(investor1, 1_000 ether, 1_000 ether);
+        vm.prank(investor1);
         oferta.aportar(1_000 ether);
     }
 
     function test_Aportar_RevertsForNonMultipleOfPreco() public {
-        vm.prank(investidor1);
+        vm.prank(investor1);
         vm.expectRevert(
-            abi.encodeWithSelector(OfertaCaptacao.AporteNaoMultiploDoPreco.selector, 150 ether, PRECO_POR_COTA)
+            abi.encodeWithSelector(OfertaCaptacao.AporteNaoMultiploDoPreco.selector, 150 ether, PRICE_PER_SHARE)
         );
         oferta.aportar(150 ether);
     }
 
     function test_Aportar_RevertsForZeroValor() public {
-        vm.prank(investidor1);
-        vm.expectRevert(abi.encodeWithSelector(OfertaCaptacao.AporteNaoMultiploDoPreco.selector, 0, PRECO_POR_COTA));
+        vm.prank(investor1);
+        vm.expectRevert(abi.encodeWithSelector(OfertaCaptacao.AporteNaoMultiploDoPreco.selector, 0, PRICE_PER_SHARE));
         oferta.aportar(0);
     }
 
-    function test_Aportar_RevertsBeyondMetaMaxima() public {
-        vm.prank(investidor1);
+    function test_Aportar_RevertsBeyondMaxTarget() public {
+        vm.prank(investor1);
         vm.expectRevert(
-            abi.encodeWithSelector(OfertaCaptacao.ExcedeMetaMaxima.selector, META_MAXIMA + PRECO_POR_COTA, META_MAXIMA)
+            abi.encodeWithSelector(OfertaCaptacao.ExcedeMetaMaxima.selector, MAX_TARGET + PRICE_PER_SHARE, MAX_TARGET)
         );
-        oferta.aportar(META_MAXIMA + PRECO_POR_COTA);
+        oferta.aportar(MAX_TARGET + PRICE_PER_SHARE);
     }
 
-    function test_Aportar_RevertsBeyondTetoPorInvestidorForNonQualified() public {
-        vm.prank(investidor1);
+    function test_Aportar_RevertsBeyondPerInvestorCapForNonQualified() public {
+        vm.prank(investor1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                OfertaCaptacao.ExcedeTetoInvestidor.selector, TETO_POR_INVESTIDOR + PRECO_POR_COTA, TETO_POR_INVESTIDOR
+                OfertaCaptacao.ExcedeTetoInvestidor.selector, PER_INVESTOR_CAP + PRICE_PER_SHARE, PER_INVESTOR_CAP
             )
         );
-        oferta.aportar(TETO_POR_INVESTIDOR + PRECO_POR_COTA);
+        oferta.aportar(PER_INVESTOR_CAP + PRICE_PER_SHARE);
     }
 
-    function test_Aportar_QualifiedInvestorBypassesTeto() public {
-        vm.prank(agente);
-        registro.definirQualificado(investidor1, true);
+    function test_Aportar_QualifiedInvestorBypassesCap() public {
+        vm.prank(agent);
+        registro.definirQualificado(investor1, true);
 
-        vm.prank(investidor1);
-        oferta.aportar(TETO_POR_INVESTIDOR + PRECO_POR_COTA);
+        vm.prank(investor1);
+        oferta.aportar(PER_INVESTOR_CAP + PRICE_PER_SHARE);
 
-        assertEq(oferta.aportadoPor(investidor1), TETO_POR_INVESTIDOR + PRECO_POR_COTA);
+        assertEq(oferta.aportadoPor(investor1), PER_INVESTOR_CAP + PRICE_PER_SHARE);
     }
 
-    function test_Aportar_RevertsAfterPrazo() public {
+    function test_Aportar_RevertsAfterDeadline() public {
         vm.warp(prazo);
-        vm.prank(investidor1);
+        vm.prank(investor1);
         vm.expectRevert(OfertaCaptacao.PrazoExpirado.selector);
         oferta.aportar(1_000 ether);
     }
@@ -250,24 +250,24 @@ contract OfertaCaptacaoTest is Test {
         vm.warp(prazo);
         oferta.encerrar();
 
-        vm.prank(investidor1);
+        vm.prank(investor1);
         vm.expectRevert(OfertaCaptacao.OfertaNaoAberta.selector);
         oferta.aportar(1_000 ether);
     }
 
     function test_Aportar_RevertsWhenPaused() public {
-        vm.prank(agente);
+        vm.prank(agent);
         oferta.pausar();
 
-        vm.prank(investidor1);
+        vm.prank(investor1);
         vm.expectRevert(Pausable.EnforcedPause.selector);
         oferta.aportar(1_000 ether);
     }
 
     function test_Aportar_MultipleInvestorsAccumulate() public {
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.aportar(1_000 ether);
-        vm.prank(investidor2);
+        vm.prank(investor2);
         oferta.aportar(2_000 ether);
 
         assertEq(oferta.totalArrecadado(), 3_000 ether);
@@ -275,17 +275,17 @@ contract OfertaCaptacaoTest is Test {
 
     // ── encerrar ────────────────────────────────────────────────────────────────────────
 
-    function test_Encerrar_RevertsBeforePrazoAndBelowMetaMaxima() public {
-        vm.prank(investidor1);
+    function test_Encerrar_RevertsBeforeDeadlineAndBelowMaxTarget() public {
+        vm.prank(investor1);
         oferta.aportar(1_000 ether);
 
         vm.expectRevert(OfertaCaptacao.EncerramentoPrematuro.selector);
         oferta.encerrar();
     }
 
-    function test_Encerrar_SuccessAtOrAboveMetaMinimaAfterPrazo() public {
-        vm.prank(investidor1);
-        oferta.aportar(META_MINIMA);
+    function test_Encerrar_SuccessAtOrAboveMinTargetAfterDeadline() public {
+        vm.prank(investor1);
+        oferta.aportar(MIN_TARGET);
 
         vm.warp(prazo);
         oferta.encerrar();
@@ -293,9 +293,9 @@ contract OfertaCaptacaoTest is Test {
         assertEq(uint256(oferta.estado()), uint256(OfertaCaptacao.Estado.EncerradaSucesso));
     }
 
-    function test_Encerrar_FailureBelowMetaMinimaAfterPrazo() public {
-        vm.prank(investidor1);
-        oferta.aportar(META_MINIMA - PRECO_POR_COTA);
+    function test_Encerrar_FailureBelowMinTargetAfterDeadline() public {
+        vm.prank(investor1);
+        oferta.aportar(MIN_TARGET - PRICE_PER_SHARE);
 
         vm.warp(prazo);
         oferta.encerrar();
@@ -303,13 +303,13 @@ contract OfertaCaptacaoTest is Test {
         assertEq(uint256(oferta.estado()), uint256(OfertaCaptacao.Estado.EncerradaFalha));
     }
 
-    function test_Encerrar_EarlyCloseAtMetaMaxima() public {
-        vm.prank(agente);
-        registro.definirQualificado(investidor1, true);
-        vm.prank(investidor1);
-        oferta.aportar(META_MAXIMA);
+    function test_Encerrar_EarlyCloseAtMaxTarget() public {
+        vm.prank(agent);
+        registro.definirQualificado(investor1, true);
+        vm.prank(investor1);
+        oferta.aportar(MAX_TARGET);
 
-        // ainda antes do prazo, mas atingiu a meta máxima — deve permitir encerrar.
+        // still before the deadline, but it reached the maximum target, so closing must be allowed.
         oferta.encerrar();
 
         assertEq(uint256(oferta.estado()), uint256(OfertaCaptacao.Estado.EncerradaSucesso));
@@ -324,35 +324,35 @@ contract OfertaCaptacaoTest is Test {
     }
 
     function test_Encerrar_EmitsEvent() public {
-        vm.prank(investidor1);
-        oferta.aportar(META_MINIMA);
+        vm.prank(investor1);
+        oferta.aportar(MIN_TARGET);
         vm.warp(prazo);
 
         vm.expectEmit(true, true, true, true, address(oferta));
-        emit OfertaCaptacao.OfertaEncerrada(OfertaCaptacao.Estado.EncerradaSucesso, META_MINIMA);
+        emit OfertaCaptacao.OfertaEncerrada(OfertaCaptacao.Estado.EncerradaSucesso, MIN_TARGET);
         oferta.encerrar();
     }
 
     function test_Encerrar_IsPermissionless() public {
         vm.warp(prazo);
-        vm.prank(estranho);
+        vm.prank(stranger);
         oferta.encerrar();
         assertEq(uint256(oferta.estado()), uint256(OfertaCaptacao.Estado.EncerradaFalha));
     }
 
     // ── cancelar ────────────────────────────────────────────────────────────────────────
 
-    function test_Cancelar_OnlyAgente() public {
-        vm.prank(estranho);
+    function test_Cancelar_OnlyAgent() public {
+        vm.prank(stranger);
         vm.expectRevert(OfertaCaptacao.NaoAutorizado.selector);
         oferta.cancelar();
     }
 
-    function test_Cancelar_MovesToEncerradaFalha() public {
-        vm.prank(investidor1);
-        oferta.aportar(META_MINIMA);
+    function test_Cancelar_MovesToClosedFailure() public {
+        vm.prank(investor1);
+        oferta.aportar(MIN_TARGET);
 
-        vm.prank(agente);
+        vm.prank(agent);
         oferta.cancelar();
 
         assertEq(uint256(oferta.estado()), uint256(OfertaCaptacao.Estado.EncerradaFalha));
@@ -362,143 +362,143 @@ contract OfertaCaptacaoTest is Test {
         vm.warp(prazo);
         oferta.encerrar();
 
-        vm.prank(agente);
+        vm.prank(agent);
         vm.expectRevert(OfertaCaptacao.OfertaNaoAberta.selector);
         oferta.cancelar();
     }
 
     function test_Cancelar_AllowsRefundAfterward() public {
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.aportar(1_000 ether);
 
-        vm.prank(agente);
+        vm.prank(agent);
         oferta.cancelar();
 
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.reembolsar();
-        assertEq(moeda.balanceOf(investidor1), 1_000_000 ether);
+        assertEq(moeda.balanceOf(investor1), 1_000_000 ether);
     }
 
     // ── resgatarCotas ───────────────────────────────────────────────────────────────────
 
-    function test_ResgatarCotas_RevertsBeforeSucesso() public {
-        vm.prank(investidor1);
-        oferta.aportar(META_MINIMA);
+    function test_ResgatarCotas_RevertsBeforeSuccess() public {
+        vm.prank(investor1);
+        oferta.aportar(MIN_TARGET);
 
-        vm.prank(investidor1);
+        vm.prank(investor1);
         vm.expectRevert(OfertaCaptacao.OfertaNaoEncerradaComSucesso.selector);
         oferta.resgatarCotas();
     }
 
     function test_ResgatarCotas_MintsProportionalCotas() public {
-        vm.prank(investidor1);
-        oferta.aportar(META_MINIMA);
+        vm.prank(investor1);
+        oferta.aportar(MIN_TARGET);
         vm.warp(prazo);
         oferta.encerrar();
 
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.resgatarCotas();
 
-        assertEq(token.balanceOf(investidor1), (META_MINIMA / PRECO_POR_COTA) * 1 ether);
+        assertEq(token.balanceOf(investor1), (MIN_TARGET / PRICE_PER_SHARE) * 1 ether);
     }
 
     function test_ResgatarCotas_RevertsOnSecondCall() public {
-        vm.prank(investidor1);
-        oferta.aportar(META_MINIMA);
+        vm.prank(investor1);
+        oferta.aportar(MIN_TARGET);
         vm.warp(prazo);
         oferta.encerrar();
 
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.resgatarCotas();
 
-        vm.prank(investidor1);
+        vm.prank(investor1);
         vm.expectRevert(OfertaCaptacao.JaResgatado.selector);
         oferta.resgatarCotas();
     }
 
     function test_ResgatarCotas_RevertsForNonContributor() public {
-        vm.prank(investidor1);
-        oferta.aportar(META_MINIMA);
+        vm.prank(investor1);
+        oferta.aportar(MIN_TARGET);
         vm.warp(prazo);
         oferta.encerrar();
 
-        vm.prank(estranho);
+        vm.prank(stranger);
         vm.expectRevert(OfertaCaptacao.NadaAResgatar.selector);
         oferta.resgatarCotas();
     }
 
     function test_ResgatarCotas_EmitsEvent() public {
-        vm.prank(investidor1);
-        oferta.aportar(META_MINIMA);
+        vm.prank(investor1);
+        oferta.aportar(MIN_TARGET);
         vm.warp(prazo);
         oferta.encerrar();
 
         vm.expectEmit(true, true, true, true, address(oferta));
-        emit OfertaCaptacao.CotasResgatadas(investidor1, (META_MINIMA / PRECO_POR_COTA) * 1 ether);
-        vm.prank(investidor1);
+        emit OfertaCaptacao.CotasResgatadas(investor1, (MIN_TARGET / PRICE_PER_SHARE) * 1 ether);
+        vm.prank(investor1);
         oferta.resgatarCotas();
     }
 
     function test_ResgatarCotas_IndependentAcrossInvestors() public {
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.aportar(4_000 ether);
-        vm.prank(investidor2);
-        oferta.aportar(META_MINIMA);
+        vm.prank(investor2);
+        oferta.aportar(MIN_TARGET);
         vm.warp(prazo);
         oferta.encerrar();
 
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.resgatarCotas();
 
-        assertEq(token.balanceOf(investidor1), (4_000 ether / PRECO_POR_COTA) * 1 ether);
-        assertEq(token.balanceOf(investidor2), 0);
-        assertFalse(oferta.cotasResgatadas(investidor2));
+        assertEq(token.balanceOf(investor1), (4_000 ether / PRICE_PER_SHARE) * 1 ether);
+        assertEq(token.balanceOf(investor2), 0);
+        assertFalse(oferta.cotasResgatadas(investor2));
     }
 
     // ── liberarParaEmissor ──────────────────────────────────────────────────────────────
 
-    function test_LiberarParaEmissor_RevertsBeforeSucesso() public {
+    function test_LiberarParaEmissor_RevertsBeforeSuccess() public {
         vm.expectRevert(OfertaCaptacao.OfertaNaoEncerradaComSucesso.selector);
         oferta.liberarParaEmissor();
     }
 
     function test_LiberarParaEmissor_SplitsFeeAndPrincipal() public {
-        vm.prank(investidor1);
-        oferta.aportar(META_MINIMA);
+        vm.prank(investor1);
+        oferta.aportar(MIN_TARGET);
         vm.warp(prazo);
         oferta.encerrar();
 
         oferta.liberarParaEmissor();
 
-        uint256 taxaEsperada = (META_MINIMA * TAXA_BPS) / 10_000;
-        assertEq(moeda.balanceOf(protocoloWallet), taxaEsperada);
-        assertEq(moeda.balanceOf(emissorWallet), META_MINIMA - taxaEsperada);
+        uint256 expectedFee = (MIN_TARGET * FEE_BPS) / 10_000;
+        assertEq(moeda.balanceOf(protocoloWallet), expectedFee);
+        assertEq(moeda.balanceOf(emissorWallet), MIN_TARGET - expectedFee);
     }
 
-    function test_LiberarParaEmissor_ZeroTaxaSendsEverythingToEmissor() public {
+    function test_LiberarParaEmissor_ZeroFeeSendsEverythingToIssuer() public {
         OfertaCaptacao clone = _newClone();
         IOfertaCaptacao.InitParams memory p = _defaultParams();
         p.taxaBps = 0;
         clone.initialize(p);
-        vm.prank(agente);
+        vm.prank(agent);
         gateway.registrarCaptacao(address(token), address(clone));
 
-        vm.prank(investidor1);
+        vm.prank(investor1);
         moeda.approve(address(clone), type(uint256).max);
-        vm.prank(investidor1);
-        clone.aportar(META_MINIMA);
+        vm.prank(investor1);
+        clone.aportar(MIN_TARGET);
         vm.warp(prazo);
         clone.encerrar();
 
         clone.liberarParaEmissor();
 
         assertEq(moeda.balanceOf(protocoloWallet), 0);
-        assertEq(moeda.balanceOf(emissorWallet), META_MINIMA);
+        assertEq(moeda.balanceOf(emissorWallet), MIN_TARGET);
     }
 
     function test_LiberarParaEmissor_RevertsOnSecondCall() public {
-        vm.prank(investidor1);
-        oferta.aportar(META_MINIMA);
+        vm.prank(investor1);
+        oferta.aportar(MIN_TARGET);
         vm.warp(prazo);
         oferta.encerrar();
 
@@ -509,32 +509,32 @@ contract OfertaCaptacaoTest is Test {
     }
 
     function test_LiberarParaEmissor_IsPermissionless() public {
-        vm.prank(investidor1);
-        oferta.aportar(META_MINIMA);
+        vm.prank(investor1);
+        oferta.aportar(MIN_TARGET);
         vm.warp(prazo);
         oferta.encerrar();
 
-        vm.prank(estranho);
+        vm.prank(stranger);
         oferta.liberarParaEmissor();
 
         assertTrue(oferta.recursosLiberados());
     }
 
     function test_LiberarParaEmissor_EmitsEvent() public {
-        vm.prank(investidor1);
-        oferta.aportar(META_MINIMA);
+        vm.prank(investor1);
+        oferta.aportar(MIN_TARGET);
         vm.warp(prazo);
         oferta.encerrar();
 
-        uint256 taxaEsperada = (META_MINIMA * TAXA_BPS) / 10_000;
+        uint256 expectedFee = (MIN_TARGET * FEE_BPS) / 10_000;
         vm.expectEmit(true, true, true, true, address(oferta));
-        emit OfertaCaptacao.RecursosLiberados(emissorWallet, META_MINIMA - taxaEsperada, protocoloWallet, taxaEsperada);
+        emit OfertaCaptacao.RecursosLiberados(emissorWallet, MIN_TARGET - expectedFee, protocoloWallet, expectedFee);
         oferta.liberarParaEmissor();
     }
 
-    function test_LiberarParaEmissor_DrainsEscrowRegardlessOfPendingResgates() public {
-        vm.prank(investidor1);
-        oferta.aportar(META_MINIMA);
+    function test_LiberarParaEmissor_DrainsEscrowRegardlessOfPendingRedemptions() public {
+        vm.prank(investor1);
+        oferta.aportar(MIN_TARGET);
         vm.warp(prazo);
         oferta.encerrar();
 
@@ -545,38 +545,38 @@ contract OfertaCaptacaoTest is Test {
 
     // ── reembolsar ──────────────────────────────────────────────────────────────────────
 
-    function test_Reembolsar_RevertsBeforeFalha() public {
-        vm.prank(investidor1);
+    function test_Reembolsar_RevertsBeforeFailure() public {
+        vm.prank(investor1);
         oferta.aportar(1_000 ether);
 
-        vm.prank(investidor1);
+        vm.prank(investor1);
         vm.expectRevert(OfertaCaptacao.OfertaNaoEncerradaComFalha.selector);
         oferta.reembolsar();
     }
 
     function test_Reembolsar_ReturnsExactContribution() public {
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.aportar(1_000 ether);
         vm.warp(prazo);
         oferta.encerrar();
 
-        uint256 saldoAntes = moeda.balanceOf(investidor1);
-        vm.prank(investidor1);
+        uint256 balanceBefore = moeda.balanceOf(investor1);
+        vm.prank(investor1);
         oferta.reembolsar();
 
-        assertEq(moeda.balanceOf(investidor1), saldoAntes + 1_000 ether);
+        assertEq(moeda.balanceOf(investor1), balanceBefore + 1_000 ether);
     }
 
     function test_Reembolsar_RevertsOnSecondCall() public {
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.aportar(1_000 ether);
         vm.warp(prazo);
         oferta.encerrar();
 
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.reembolsar();
 
-        vm.prank(investidor1);
+        vm.prank(investor1);
         vm.expectRevert(OfertaCaptacao.JaReembolsado.selector);
         oferta.reembolsar();
     }
@@ -585,93 +585,93 @@ contract OfertaCaptacaoTest is Test {
         vm.warp(prazo);
         oferta.encerrar();
 
-        vm.prank(estranho);
+        vm.prank(stranger);
         vm.expectRevert(OfertaCaptacao.NadaAReembolsar.selector);
         oferta.reembolsar();
     }
 
     function test_Reembolsar_EmitsEvent() public {
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.aportar(1_000 ether);
         vm.warp(prazo);
         oferta.encerrar();
 
         vm.expectEmit(true, true, true, true, address(oferta));
-        emit OfertaCaptacao.Reembolso(investidor1, 1_000 ether);
-        vm.prank(investidor1);
+        emit OfertaCaptacao.Reembolso(investor1, 1_000 ether);
+        vm.prank(investor1);
         oferta.reembolsar();
     }
 
     function test_Reembolsar_IndependentAcrossInvestors() public {
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.aportar(1_000 ether);
-        vm.prank(investidor2);
+        vm.prank(investor2);
         oferta.aportar(2_000 ether);
         vm.warp(prazo);
         oferta.encerrar();
 
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.reembolsar();
 
-        assertTrue(oferta.reembolsado(investidor1));
-        assertFalse(oferta.reembolsado(investidor2));
+        assertTrue(oferta.reembolsado(investor1));
+        assertFalse(oferta.reembolsado(investor2));
         assertEq(moeda.balanceOf(address(oferta)), 2_000 ether);
     }
 
     // ── pausar / despausar ──────────────────────────────────────────────────────────────
 
-    function test_Pausar_OnlyAgente() public {
-        vm.prank(estranho);
+    function test_Pausar_OnlyAgent() public {
+        vm.prank(stranger);
         vm.expectRevert(OfertaCaptacao.NaoAutorizado.selector);
         oferta.pausar();
     }
 
     function test_Despausar_ReenablesAporte() public {
-        vm.prank(agente);
+        vm.prank(agent);
         oferta.pausar();
-        vm.prank(agente);
+        vm.prank(agent);
         oferta.despausar();
 
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.aportar(1_000 ether);
         assertEq(oferta.totalArrecadado(), 1_000 ether);
     }
 
     function test_Pausar_DoesNotBlockReembolso() public {
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.aportar(1_000 ether);
         vm.warp(prazo);
         oferta.encerrar();
 
-        vm.prank(agente);
+        vm.prank(agent);
         oferta.pausar();
 
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.reembolsar();
-        assertTrue(oferta.reembolsado(investidor1));
+        assertTrue(oferta.reembolsado(investor1));
     }
 
     function test_Pausar_DoesNotBlockResgatarCotas() public {
-        vm.prank(investidor1);
-        oferta.aportar(META_MINIMA);
+        vm.prank(investor1);
+        oferta.aportar(MIN_TARGET);
         vm.warp(prazo);
         oferta.encerrar();
 
-        vm.prank(agente);
+        vm.prank(agent);
         oferta.pausar();
 
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.resgatarCotas();
-        assertTrue(oferta.cotasResgatadas(investidor1));
+        assertTrue(oferta.cotasResgatadas(investor1));
     }
 
     function test_Pausar_DoesNotBlockLiberarParaEmissor() public {
-        vm.prank(investidor1);
-        oferta.aportar(META_MINIMA);
+        vm.prank(investor1);
+        oferta.aportar(MIN_TARGET);
         vm.warp(prazo);
         oferta.encerrar();
 
-        vm.prank(agente);
+        vm.prank(agent);
         oferta.pausar();
 
         oferta.liberarParaEmissor();
@@ -681,14 +681,14 @@ contract OfertaCaptacaoTest is Test {
     // ── Views ───────────────────────────────────────────────────────────────────────────
 
     function test_CapacidadeRestante() public {
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.aportar(1_000 ether);
-        assertEq(oferta.capacidadeRestante(), META_MAXIMA - 1_000 ether);
+        assertEq(oferta.capacidadeRestante(), MAX_TARGET - 1_000 ether);
     }
 
     function test_CotasDe() public {
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.aportar(1_000 ether);
-        assertEq(oferta.cotasDe(investidor1), (1_000 ether / PRECO_POR_COTA) * 1 ether);
+        assertEq(oferta.cotasDe(investor1), (1_000 ether / PRICE_PER_SHARE) * 1 ether);
     }
 }

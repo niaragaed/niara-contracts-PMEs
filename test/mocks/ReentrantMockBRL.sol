@@ -3,15 +3,15 @@ pragma solidity ^0.8.24;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
-/// @notice Moeda maliciosa usada SÓ em testes: ao ser transferida para fora de um contrato
-/// (`transfer`), tenta reentrar num alvo configurável antes de retornar. Simula uma stablecoin
-/// de BRL real que, diferente de `MockBRL`, tivesse hook/callback — o gotcha documentado no
-/// CLAUDE.md ("tratar como se a moeda pudesse ter callback") existe justamente para este caso.
+/// @notice Malicious currency used ONLY in tests: when transferred out of a contract
+/// (`transfer`), it tries to re-enter a configurable target before returning. Simulates a real
+/// BRL stablecoin that, unlike `MockBRL`, had a hook/callback; the gotcha documented in
+/// CLAUDE.md ("treat the currency as if it could have a callback") exists precisely for this case.
 contract ReentrantMockBRL is ERC20 {
-    address public alvo;
-    bytes public callDataAtaque;
-    bool public ativo;
-    bool public reentradaBloqueada;
+    address public target;
+    bytes public attackCallData;
+    bool public active;
+    bool public reentryBlocked;
 
     constructor() ERC20("Reentrant Mock BRL", "rBRL") {}
 
@@ -19,32 +19,32 @@ contract ReentrantMockBRL is ERC20 {
         _mint(to, amount);
     }
 
-    /// @dev Arma o próximo `transfer`/`transferFrom` para tentar reentrar `alvo` com
-    /// `callData_` (calldata completo — selector + argumentos, ex.:
+    /// @dev Arms the next `transfer`/`transferFrom` to try to re-enter `target` with
+    /// `callData_` (full calldata: selector + arguments, e.g.
     /// `abi.encodeWithSelector(OfertaCaptacao.reembolsar.selector)`).
-    function configurarAtaque(address alvo_, bytes calldata callData_) external {
-        alvo = alvo_;
-        callDataAtaque = callData_;
-        ativo = true;
-        reentradaBloqueada = false;
+    function armAttack(address target_, bytes calldata callData_) external {
+        target = target_;
+        attackCallData = callData_;
+        active = true;
+        reentryBlocked = false;
     }
 
     function transfer(address to, uint256 amount) public override returns (bool) {
         bool ok = super.transfer(to, amount);
-        _tentarReentrar();
+        _tryReenter();
         return ok;
     }
 
     function transferFrom(address from, address to, uint256 amount) public override returns (bool) {
         bool ok = super.transferFrom(from, to, amount);
-        _tentarReentrar();
+        _tryReenter();
         return ok;
     }
 
-    function _tentarReentrar() internal {
-        if (!ativo) return;
-        ativo = false; // evita loop infinito na própria tentativa de ataque
-        (bool success,) = alvo.call(callDataAtaque);
-        reentradaBloqueada = !success;
+    function _tryReenter() internal {
+        if (!active) return;
+        active = false; // avoids an infinite loop in the attack attempt itself
+        (bool success,) = target.call(attackCallData);
+        reentryBlocked = !success;
     }
 }
