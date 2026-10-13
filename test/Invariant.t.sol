@@ -107,8 +107,8 @@ contract InvariantTest is Test {
         }
     }
 
-    // ── Invariante: apenas o gateway atesta/minta/pausa no token; apenas AGENTE_ROLE opera
-    // no gateway/factory ────────────────────────────────────────────────────────────────
+    // ── Invariant: only the gateway attests/mints/pauses on the token; only AGENTE_ROLE
+    // operates the gateway/factory ──────────────────────────────────────────────────────
 
     function invariant_NoUnauthorizedTokenCallEverSucceeded() public view {
         assertFalse(handler.ghost_unauthorizedTokenCallSucceeded());
