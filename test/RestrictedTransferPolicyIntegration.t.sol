@@ -118,7 +118,7 @@ contract RestrictedTransferPolicyIntegrationTest is Test {
 
         assertEq(token.balanceOf(investor1), 100 ether);
     }
-
+    // ── resgatarCotas (redeem shares, Phase 2) keeps working with the Restricted policy attached ──
     // ── resgatarCotas (Fase 2) continua funcionando com a Restricted anexada ──────────────
 
     function test_ResgatarCotas_KeepsWorkingWithRestrictedAttached() public {
