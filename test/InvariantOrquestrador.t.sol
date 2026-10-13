@@ -13,18 +13,17 @@ import {MockBRL} from "../src/mocks/MockBRL.sol";
 import {OfertaOrquestrador} from "../src/orquestracao/OfertaOrquestrador.sol";
 import {HandlerOrquestrador} from "./invariant/HandlerOrquestrador.sol";
 
-/// @notice Testes de invariante com fuzzing stateful do domínio do `OfertaOrquestrador`: o
-/// `HandlerOrquestrador` executa sequências aleatórias de autorizarEmissor/revogarEmissor/
-/// pausar/criarOfertaCompleta/fecharUltimaOferta(ComFalha|ComSucesso), mais tentativas
-/// deliberadas de burlar as guardas, e as funções abaixo verificam que os invariantes do
-/// orquestrador se mantêm após CADA chamada. Mesma escala das demais suítes de invariante
-/// (`runs=256 * depth=100` = 25.600 chamadas por invariante, ver `[invariant]` em
-/// foundry.toml).
+/// @notice Stateful fuzzing invariant tests for the `OfertaOrquestrador` domain: the
+/// `HandlerOrquestrador` runs random sequences of autorizarEmissor/revogarEmissor/
+/// pausar/criarOfertaCompleta/fecharUltimaOferta(ComFalha|ComSucesso), plus deliberate
+/// attempts to bypass the guards, and the functions below check that the orchestrator's
+/// invariants hold after EVERY call. Same scale as the other invariant suites
+/// (`runs=256 * depth=100` = 25,600 calls per invariant, see `[invariant]` in foundry.toml).
 contract InvariantOrquestradorTest is Test {
-    ParticipacaoToken public tokenImplementacao;
+    ParticipacaoToken public tokenImplementation;
     ParticipacaoTokenFactory public tokenFactory;
     EmissaoGateway public gateway;
-    OfertaCaptacao public ofertaImplementacao;
+    OfertaCaptacao public offeringImplementation;
     OfertaCaptacaoFactory public captacaoFactory;
     RegistroInvestidorQualificado public registro;
     DenyAllTransferPolicy public policy;
@@ -33,10 +32,10 @@ contract InvariantOrquestradorTest is Test {
     HandlerOrquestrador public handler;
 
     address public admin = makeAddr("adminOrq");
-    address public agenteOrq = makeAddr("agenteOrqInv");
-    address public agenteGateway = makeAddr("agenteGatewayInv");
+    address public orchestratorAgent = makeAddr("agenteOrqInv");
+    address public gatewayAgent = makeAddr("agenteGatewayInv");
     address public protocoloWallet = makeAddr("protocoloWalletInv");
-    address public investidorFuzz = makeAddr("investidorFuzzInv");
+    address public fuzzInvestor = makeAddr("investidorFuzzInv");
 
     uint256 public constant TIMELOCK_DELAY = 1 hours;
     uint256 public constant TAXA_BPS_MAXIMA = 100;
@@ -48,18 +47,18 @@ contract InvariantOrquestradorTest is Test {
     }
 
     function _deployContracts() internal {
-        tokenImplementacao = new ParticipacaoToken();
+        tokenImplementation = new ParticipacaoToken();
         policy = new DenyAllTransferPolicy();
         gateway = new EmissaoGateway(admin, TIMELOCK_DELAY);
         tokenFactory = new ParticipacaoTokenFactory(
-            admin, address(tokenImplementacao), address(gateway), address(policy), TIMELOCK_DELAY
+            admin, address(tokenImplementation), address(gateway), address(policy), TIMELOCK_DELAY
         );
 
         registro = new RegistroInvestidorQualificado(admin, TIMELOCK_DELAY);
         moeda = new MockBRL();
-        ofertaImplementacao = new OfertaCaptacao();
+        offeringImplementation = new OfertaCaptacao();
         captacaoFactory = new OfertaCaptacaoFactory(
-            admin, address(ofertaImplementacao), address(gateway), address(registro), address(moeda), TIMELOCK_DELAY
+            admin, address(offeringImplementation), address(gateway), address(registro), address(moeda), TIMELOCK_DELAY
         );
 
         orq = new OfertaOrquestrador(
@@ -68,10 +67,10 @@ contract InvariantOrquestradorTest is Test {
             address(gateway),
             address(captacaoFactory),
             protocoloWallet,
-            0, // taxaBps inicial — dormente, mesmo padrão do restante do repositório
-            // tetoPorInvestidor generoso o bastante para cobrir a meta máxima de qualquer
-            // oferta de teste (até TETO_OFERTA) sem precisar qualificar o investidor fuzz —
-            // simplificação deliberada do harness, não uma trava real de negócio.
+            0, // initial taxaBps: dormant, same pattern as the rest of the repository
+            // tetoPorInvestidor generous enough to cover any test offering's maximum target
+            // (up to TETO_OFERTA) without having to qualify the fuzz investor: a deliberate
+            // harness simplification, not a real business lock.
             15_000_000 ether,
             TIMELOCK_DELAY
         );
@@ -82,12 +81,12 @@ contract InvariantOrquestradorTest is Test {
         _grantRoleOn(address(gateway), gateway.AGENTE_ROLE(), address(orq));
         _grantRoleOn(address(captacaoFactory), captacaoFactory.AGENTE_ROLE(), address(orq));
 
-        // AGENTE_ROLE na EmissaoGateway para o handler poder cancelar() ofertas e fechar o
-        // ciclo "uma aberta por vez" pelo caminho de falha.
-        _grantRoleOn(address(gateway), gateway.AGENTE_ROLE(), agenteGateway);
+        // AGENTE_ROLE on EmissaoGateway so the handler can cancelar() offerings and close the
+        // "one open at a time" cycle through the failure path.
+        _grantRoleOn(address(gateway), gateway.AGENTE_ROLE(), gatewayAgent);
 
-        // AGENTE_ROLE do próprio orquestrador, para o handler gerir allowlist/pausa.
-        _grantRoleOn(address(orq), orq.AGENTE_ROLE(), agenteOrq);
+        // The orchestrator's own AGENTE_ROLE, so the handler can manage the allowlist/pause.
+        _grantRoleOn(address(orq), orq.AGENTE_ROLE(), orchestratorAgent);
     }
 
     function _deployHandler() internal {
@@ -100,15 +99,15 @@ contract InvariantOrquestradorTest is Test {
 
         handler = new HandlerOrquestrador(
             HandlerOrquestrador.Config({
-                orq: orq,
+                orch: orq,
                 tokenFactory: tokenFactory,
-                captacaoFactory: captacaoFactory,
-                moeda: moeda,
+                fundraisingFactory: captacaoFactory,
+                currency: moeda,
                 admin: admin,
-                agenteOrq: agenteOrq,
-                agenteGateway: agenteGateway,
+                orchestratorAgent: orchestratorAgent,
+                gatewayAgent: gatewayAgent,
                 actors: actors,
-                investidorFuzz: investidorFuzz
+                fuzzInvestor: fuzzInvestor
             })
         );
 
@@ -120,10 +119,10 @@ contract InvariantOrquestradorTest is Test {
         selectors = new bytes4[](6);
         selectors[0] = HandlerOrquestrador.autorizarEmissor.selector;
         selectors[1] = HandlerOrquestrador.revogarEmissor.selector;
-        selectors[2] = HandlerOrquestrador.pausarOuDespausar.selector;
+        selectors[2] = HandlerOrquestrador.pauseOrUnpause.selector;
         selectors[3] = HandlerOrquestrador.criarOfertaCompleta.selector;
-        selectors[4] = HandlerOrquestrador.fecharUltimaOfertaComFalha.selector;
-        selectors[5] = HandlerOrquestrador.fecharUltimaOfertaComSucesso.selector;
+        selectors[4] = HandlerOrquestrador.closeLastOfferingWithFailure.selector;
+        selectors[5] = HandlerOrquestrador.closeLastOfferingWithSuccess.selector;
     }
 
     function _grantRoleOn(address target, bytes32 role, address account) internal {
@@ -136,7 +135,7 @@ contract InvariantOrquestradorTest is Test {
         require(ok2, "execute failed");
     }
 
-    // ── Invariante 1: totalSupply <= cotasAutorizadas para todo token criado via orquestrador ──
+    // ── Invariant 1: totalSupply <= cotasAutorizadas for every token created via the orchestrator ──
 
     function invariant_TotalSupplyNeverExceedsCotasAutorizadas() public view {
         uint256 n = handler.numTokens();
@@ -146,52 +145,52 @@ contract InvariantOrquestradorTest is Test {
         }
     }
 
-    // ── Invariante 2: nenhuma oferta criada via orquestrador existe fora dos limites Res. 88 ──
+    // ── Invariant 2: no offering created via the orchestrator exists outside the Res. 88 limits ──
 
-    function invariant_NenhumaOfertaForaDosLimitesRes88() public view {
+    function invariant_NoOfferingOutsideRes88Limits() public view {
         uint256 n = handler.numOfertas();
         for (uint256 i = 0; i < n; i++) {
             OfertaCaptacao oferta = OfertaCaptacao(handler.ofertas(i));
-            uint256 criadoEm = handler.ghost_criadoEm(address(oferta));
+            uint256 createdAt = handler.ghost_createdAt(address(oferta));
 
             assertLe(oferta.metaMaxima(), orq.TETO_OFERTA());
-            assertLe(oferta.prazo() - criadoEm, orq.PRAZO_MAXIMO());
+            assertLe(oferta.prazo() - createdAt, orq.PRAZO_MAXIMO());
             assertLe(oferta.metaMaxima() * orq.LOTE_ADICIONAL_DENOMINADOR(), oferta.metaMinima() * orq.LOTE_ADICIONAL_NUMERADOR());
         }
     }
 
-    // ── Invariante 3: nenhum emissor tem mais de uma oferta Aberta simultaneamente ──────────
+    // ── Invariant 3: no issuer has more than one open offering at the same time ─────────────
 
-    function invariant_NenhumEmissorComMaisDeUmaOfertaAberta() public view {
-        uint256 numEmissores = handler.numEmissoresRastreados();
+    function invariant_NoIssuerWithMoreThanOneOpenOffering() public view {
+        uint256 issuerCount = handler.trackedIssuerCount();
         uint256 numOfertas = handler.numOfertas();
 
-        for (uint256 e = 0; e < numEmissores; e++) {
-            address emissor = handler.emissoresRastreados(e);
-            uint256 abertasDoEmissor = 0;
+        for (uint256 e = 0; e < issuerCount; e++) {
+            address emissor = handler.trackedIssuers(e);
+            uint256 openByIssuer = 0;
 
             for (uint256 i = 0; i < numOfertas; i++) {
                 OfertaCaptacao oferta = OfertaCaptacao(handler.ofertas(i));
                 if (oferta.emissorWallet() == emissor && oferta.estado() == OfertaCaptacao.Estado.Aberta) {
-                    abertasDoEmissor++;
+                    openByIssuer++;
                 }
             }
 
-            assertLe(abertasDoEmissor, 1);
+            assertLe(openByIssuer, 1);
         }
     }
 
-    // ── Invariante 4: emissorWallet de toda oferta estava em emissoresAutorizados na criação ──
+    // ── Invariant 4: every offering's emissorWallet was in emissoresAutorizados at creation ──
 
     function invariant_TodaOfertaTinhaEmissorAutorizadoNaCriacao() public view {
         uint256 n = handler.numOfertas();
         for (uint256 i = 0; i < n; i++) {
             address oferta = handler.ofertas(i);
-            assertTrue(handler.ghost_autorizadoNaCriacao(oferta));
+            assertTrue(handler.ghost_authorizedAtCreation(oferta));
         }
     }
 
-    // ── Invariantes adicionais (mesmo padrão de profundidade defensiva das fases anteriores) ──
+    // ── Additional invariants (same defensive-depth pattern as the earlier phases) ──────────
 
     function invariant_NoUnauthorizedAdminActionEverSucceeded() public view {
         assertFalse(handler.ghost_unauthorizedAdminActionSucceeded());

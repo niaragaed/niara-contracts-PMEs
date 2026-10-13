@@ -9,61 +9,61 @@ import {RestrictedTransferPolicy} from "../../src/policies/RestrictedTransferPol
 import {LiquidacaoSecundaria} from "../../src/secundario/LiquidacaoSecundaria.sol";
 import {MockBRL} from "../../src/mocks/MockBRL.sol";
 
-/// @notice Ator de fuzzing stateful do domínio da liquidação secundária (Fase 4): cria tokens
-/// (a factory já aponta, por padrão, para a `RestrictedTransferPolicy` compartilhada — ver
-/// `InvariantSecundarioTest.setUp`), minta cotas e `MockBRL`, gerencia elegibilidade/lock-up/
-/// flag mestre da política (mesmo desenho de `HandlerPolitica` da Fase 3), gerencia allowances,
-/// e submete cessões com partes/quantidades/preços aleatórios. Mesmo espírito de
-/// `Handler`/`HandlerCaptacao`/`HandlerPolitica`: a maioria das chamadas usa parâmetros válidos;
-/// as `tentar*` tomam de propósito o caminho inválido.
+/// @notice Stateful fuzzing actor for the secondary-settlement domain (Phase 4): creates tokens
+/// (the factory points, by default, at the shared `RestrictedTransferPolicy`; see
+/// `InvariantSecundarioTest.setUp`), mints shares and `MockBRL`, manages the policy's
+/// eligibility/lock-up/master flag (same design as Phase 3's `HandlerPolitica`), manages
+/// allowances, and submits assignments with random parties/quantities/prices. Same spirit as
+/// `Handler`/`HandlerCaptacao`/`HandlerPolitica`: most calls use valid parameters; the
+/// `tentar*` ones take the invalid path on purpose.
 ///
-/// A prova central desta fase é o espelho `ghost_moedaEsperada`/`ghost_cotasEsperadas`: toda
-/// via de entrada de saldo (mint de cotas via gateway, mint de `MockBRL`) e toda liquidação
-/// bem-sucedida atualizam o espelho com a MESMA aritmética que o contrato real deveria aplicar.
-/// Se `LiquidacaoSecundaria` tivesse um bug de conservação (perder poeira, duplicar uma perna,
-/// aplicar a taxa errada) ou uma cessão bloqueada pela política de alguma forma movesse fundos
-/// mesmo assim, o saldo real divergiria do espelho — não há caminho de saldo fora dessas duas
-/// vias mirroradas.
+/// The core proof of this phase is the `ghost_expectedCurrency`/`ghost_expectedShares` mirror:
+/// every balance inflow (share mint via gateway, `MockBRL` mint) and every successful
+/// settlement updates the mirror with the SAME arithmetic the real contract should apply.
+/// If `LiquidacaoSecundaria` had a conservation bug (losing dust, duplicating a leg, applying
+/// the wrong fee) or an assignment blocked by the policy somehow moved funds anyway, the real
+/// balance would diverge from the mirror; there is no balance path outside these two
+/// mirrored routes.
 contract HandlerSecundario is Test {
     ParticipacaoTokenFactory public factory;
     EmissaoGateway public gateway;
     RestrictedTransferPolicy public policy;
     MockBRL public moeda;
-    LiquidacaoSecundaria public liquidacao;
+    LiquidacaoSecundaria public settlement;
 
     address public admin;
-    address public agente;
+    address public agent;
     address[] public actors;
 
     address[] public tokens;
 
-    mapping(address => uint256) public ghost_moedaEsperada;
-    mapping(address => mapping(address => uint256)) public ghost_cotasEsperadas;
+    mapping(address => uint256) public ghost_expectedCurrency;
+    mapping(address => mapping(address => uint256)) public ghost_expectedShares;
 
-    /// @notice Vira `true` se uma `liquidarCessao` bem-sucedida tiver ocorrido com
-    /// `policy.canTransfer(token, vendedor, comprador, quantidade) == false` no momento da
-    /// chamada — a prova de que o gate Fase 3 ↔ Fase 4 nunca é contornado.
+    /// @notice Becomes `true` if a successful `liquidarCessao` happened with
+    /// `policy.canTransfer(token, vendedor, comprador, quantidade) == false` at call time: the
+    /// proof that the Phase 3 ↔ Phase 4 gate is never bypassed.
     bool public ghost_policyGateBypassSucceeded;
 
-    /// @notice Vira `true` se `liquidarCessao` for bem-sucedida chamada por alguém sem
+    /// @notice Becomes `true` if `liquidarCessao` succeeds when called by someone without
     /// `AGENTE_ROLE`.
     bool public ghost_unauthorizedLiquidarSucceeded;
 
-    /// @notice Vira `true` se `proposeSetTaxaSecundarioBps`/`proposeSetProtocoloWallet` forem
-    /// bem-sucedidos chamados por alguém sem `DEFAULT_ADMIN_ROLE`.
+    /// @notice Becomes `true` if `proposeSetTaxaSecundarioBps`/`proposeSetProtocoloWallet` succeed
+    /// when called by someone without `DEFAULT_ADMIN_ROLE`.
     bool public ghost_unauthorizedGovernanceCallSucceeded;
 
-    /// @notice Vira `true` se `taxaSecundarioBps` ultrapassar o teto rígido em algum momento.
-    bool public ghost_taxaExcedeuTetoSucceeded;
+    /// @notice Becomes `true` if `taxaSecundarioBps` ever exceeds the hard cap.
+    bool public ghost_feeExceededCapSucceeded;
 
     struct Config {
         ParticipacaoTokenFactory factory;
         EmissaoGateway gateway;
         RestrictedTransferPolicy policy;
-        MockBRL moeda;
-        LiquidacaoSecundaria liquidacao;
+        MockBRL currency;
+        LiquidacaoSecundaria settlement;
         address admin;
-        address agente;
+        address agent;
         address[] actors;
     }
 
@@ -71,14 +71,14 @@ contract HandlerSecundario is Test {
         factory = config.factory;
         gateway = config.gateway;
         policy = config.policy;
-        moeda = config.moeda;
-        liquidacao = config.liquidacao;
+        moeda = config.currency;
+        settlement = config.settlement;
         admin = config.admin;
-        agente = config.agente;
+        agent = config.agent;
         actors = config.actors;
     }
 
-    // ── Helpers de seleção ─────────────────────────────────────────────────────────────
+    // ── Selection helpers ──────────────────────────────────────────────────────────────
 
     function _actorAt(uint256 seed) internal view returns (address) {
         return actors[seed % actors.length];
@@ -99,69 +99,69 @@ contract HandlerSecundario is Test {
         return seed % 5 == 0;
     }
 
-    // ── Criação de tokens (já apontam para a Restricted compartilhada, ver setUp) ────────
+    // ── Token creation (they already point at the shared Restricted policy, see setUp) ───
 
-    function criarToken(uint256 seed) external {
-        vm.prank(agente);
+    function createToken(uint256 seed) external {
+        vm.prank(agent);
         address token = factory.criarOferta(
             "Oferta Secundario", "nSEC", "Empresa Secundario", bytes32(0), vm.toString(seed)
         );
 
-        vm.prank(agente);
+        vm.prank(agent);
         gateway.atestarCotas(token, 1_000_000 ether);
 
         tokens.push(token);
     }
 
-    // ── Entradas de saldo (mirroradas) ─────────────────────────────────────────────────
+    // ── Balance inflows (mirrored) ─────────────────────────────────────────────────────
 
-    function mintarCotas(uint256 tokenSeed, uint256 toSeed, uint256 amountSeed) external {
+    function mintSharesTo(uint256 tokenSeed, uint256 toSeed, uint256 amountSeed) external {
         if (tokens.length == 0) return;
         address token = _pickToken(tokenSeed);
         address to = _actorAt(toSeed);
 
-        uint256 restante = ParticipacaoToken(token).cotasAutorizadas() - ParticipacaoToken(token).totalSupply();
-        if (restante == 0) return;
-        uint256 amount = bound(amountSeed, 1, restante);
+        uint256 remaining = ParticipacaoToken(token).cotasAutorizadas() - ParticipacaoToken(token).totalSupply();
+        if (remaining == 0) return;
+        uint256 amount = bound(amountSeed, 1, remaining);
 
-        vm.prank(agente);
+        vm.prank(agent);
         gateway.emitir(token, to, amount);
-        ghost_cotasEsperadas[token][to] += amount;
+        ghost_expectedShares[token][to] += amount;
     }
 
-    function mintarMoeda(uint256 actorSeed, uint256 amountSeed) external {
+    function mintCurrency(uint256 actorSeed, uint256 amountSeed) external {
         address actor = _actorAt(actorSeed);
         uint256 amount = bound(amountSeed, 1, 1_000_000 ether);
 
         moeda.mint(actor, amount);
-        ghost_moedaEsperada[actor] += amount;
+        ghost_expectedCurrency[actor] += amount;
     }
 
     // ── Allowances ──────────────────────────────────────────────────────────────────────
 
-    function aprovarCotas(uint256 tokenSeed, uint256 actorSeed) external {
+    function approveShares(uint256 tokenSeed, uint256 actorSeed) external {
         if (tokens.length == 0) return;
         address token = _pickToken(tokenSeed);
         address actor = _actorAt(actorSeed);
 
         vm.prank(actor);
-        ParticipacaoToken(token).approve(address(liquidacao), type(uint256).max);
+        ParticipacaoToken(token).approve(address(settlement), type(uint256).max);
     }
 
-    function aprovarMoeda(uint256 actorSeed) external {
+    function approveCurrency(uint256 actorSeed) external {
         address actor = _actorAt(actorSeed);
         vm.prank(actor);
-        moeda.approve(address(liquidacao), type(uint256).max);
+        moeda.approve(address(settlement), type(uint256).max);
     }
 
-    // ── Política (mesmo desenho de HandlerPolitica, Fase 3) ───────────────────────────────
+    // ── Policy (same design as HandlerPolitica, Phase 3) ───────────────────────────────────
 
-    function definirElegivel(uint256 tokenSeed, uint256 investidorSeed, uint256 flagSeed, uint256 chaosSeed) external {
+    function definirElegivel(uint256 tokenSeed, uint256 investorSeed, uint256 flagSeed, uint256 chaosSeed) external {
         if (tokens.length == 0) return;
         address token = _pickToken(tokenSeed);
-        address investidor = _actorAt(investidorSeed);
+        address investidor = _actorAt(investorSeed);
         bool estaElegivel = flagSeed % 2 == 0;
-        address caller = _chaos(chaosSeed) ? _actorAt(chaosSeed) : agente;
+        address caller = _chaos(chaosSeed) ? _actorAt(chaosSeed) : agent;
 
         vm.prank(caller);
         try policy.definirElegivel(token, investidor, estaElegivel) {} catch {}
@@ -172,11 +172,11 @@ contract HandlerSecundario is Test {
         address token = _pickToken(tokenSeed);
         uint64 novoLockupAte = uint64(block.timestamp + bound(lockupSeed, 0, 30 days));
 
-        vm.prank(agente);
+        vm.prank(agent);
         try policy.definirLockup(token, novoLockupAte) {} catch {}
     }
 
-    function abrirSecundario(uint256 tokenSeed, uint256 chaosSeed) external {
+    function openSecondary(uint256 tokenSeed, uint256 chaosSeed) external {
         if (tokens.length == 0) return;
         address token = _pickToken(tokenSeed);
         address caller = _chaos(chaosSeed) ? _actorAt(chaosSeed) : admin;
@@ -184,9 +184,9 @@ contract HandlerSecundario is Test {
         vm.prank(caller);
         try policy.proposeSetSecundarioLiberado(token, true) returns (uint256 executeAfter) {
             if (caller != admin) {
-                // Defesa em profundidade: RestrictedTransferPolicy já é coberta por
-                // InvariantPoliticaTest (Fase 3); aqui só marcamos para não esconder uma
-                // regressão silenciosamente caso o guard dela quebre.
+                // Defense in depth: RestrictedTransferPolicy is already covered by
+                // InvariantPoliticaTest (Phase 3); here we only flag it so a regression is not hidden
+                // silently if its guard breaks.
                 ghost_unauthorizedGovernanceCallSucceeded = true;
                 return;
             }
@@ -196,47 +196,47 @@ contract HandlerSecundario is Test {
         } catch {}
     }
 
-    function avancarTempo(uint256 seed) external {
+    function advanceTime(uint256 seed) external {
         vm.warp(block.timestamp + bound(seed, 1, 20 days));
     }
 
-    // ── A ação central: submeter uma cessão ────────────────────────────────────────────
+    // ── The core action: submitting an assignment ──────────────────────────────────────
 
-    function tentarLiquidarCessao(
+    function trySettleAssignment(
         uint256 tokenSeed,
-        uint256 vendedorSeed,
-        uint256 compradorSeed,
-        uint256 quantidadeSeed,
-        uint256 precoSeed,
+        uint256 sellerSeed,
+        uint256 buyerSeed,
+        uint256 quantitySeed,
+        uint256 priceSeed,
         uint256 chaosSeed
     ) external {
         if (tokens.length == 0) return;
         address token = _pickToken(tokenSeed);
-        address vendedor = _actorAt(vendedorSeed);
-        address comprador = _distinctActor(compradorSeed, vendedor);
+        address vendedor = _actorAt(sellerSeed);
+        address comprador = _distinctActor(buyerSeed, vendedor);
 
-        uint256 saldoVendedor = ParticipacaoToken(token).balanceOf(vendedor);
+        uint256 sellerBalance = ParticipacaoToken(token).balanceOf(vendedor);
         bool chaos = _chaos(chaosSeed);
 
         uint256 quantidade;
         if (chaos) {
-            quantidade = quantidadeSeed % (2 * (saldoVendedor == 0 ? 1 ether : saldoVendedor) + 1);
+            quantidade = quantitySeed % (2 * (sellerBalance == 0 ? 1 ether : sellerBalance) + 1);
         } else {
-            if (saldoVendedor == 0) return;
-            quantidade = bound(quantidadeSeed, 1, saldoVendedor);
+            if (sellerBalance == 0) return;
+            quantidade = bound(quantitySeed, 1, sellerBalance);
         }
-        uint256 precoPorCota = bound(precoSeed, 1 ether, 1_000 ether);
+        uint256 precoPorCota = bound(priceSeed, 1 ether, 1_000 ether);
 
-        address caller = chaos && chaosSeed % 3 == 0 ? _actorAt(chaosSeed) : agente;
+        address caller = chaos && chaosSeed % 3 == 0 ? _actorAt(chaosSeed) : agent;
 
         bool policyGate = quantidade > 0 && policy.canTransfer(token, vendedor, comprador, quantidade);
 
         uint256 valor = (quantidade * precoPorCota) / 1 ether;
-        uint256 taxa = (valor * liquidacao.taxaSecundarioBps()) / 10_000;
+        uint256 taxa = (valor * settlement.taxaSecundarioBps()) / 10_000;
 
         vm.prank(caller);
-        try liquidacao.liquidarCessao(token, vendedor, comprador, quantidade, precoPorCota) {
-            if (caller != agente) {
+        try settlement.liquidarCessao(token, vendedor, comprador, quantidade, precoPorCota) {
+            if (caller != agent) {
                 ghost_unauthorizedLiquidarSucceeded = true;
                 return;
             }
@@ -245,41 +245,41 @@ contract HandlerSecundario is Test {
                 return;
             }
 
-            ghost_cotasEsperadas[token][vendedor] -= quantidade;
-            ghost_cotasEsperadas[token][comprador] += quantidade;
-            ghost_moedaEsperada[comprador] -= valor;
-            ghost_moedaEsperada[vendedor] += valor - taxa;
-            ghost_moedaEsperada[liquidacao.protocoloWallet()] += taxa;
+            ghost_expectedShares[token][vendedor] -= quantidade;
+            ghost_expectedShares[token][comprador] += quantidade;
+            ghost_expectedCurrency[comprador] -= valor;
+            ghost_expectedCurrency[vendedor] += valor - taxa;
+            ghost_expectedCurrency[settlement.protocoloWallet()] += taxa;
         } catch {}
     }
 
-    // ── Governança (taxa / protocoloWallet) ────────────────────────────────────────────
+    // ── Governance (fee / protocoloWallet) ─────────────────────────────────────────────
 
-    function ajustarTaxa(uint256 novaTaxaSeed, uint256 chaosSeed) external {
+    function adjustFee(uint256 newFeeSeed, uint256 chaosSeed) external {
         bool chaos = _chaos(chaosSeed);
-        uint256 novaTaxa = chaos ? bound(novaTaxaSeed, 101, 10_000) : bound(novaTaxaSeed, 0, 100);
+        uint256 novaTaxa = chaos ? bound(newFeeSeed, 101, 10_000) : bound(newFeeSeed, 0, 100);
         address caller = chaos && chaosSeed % 2 == 0 ? _actorAt(chaosSeed) : admin;
 
         vm.prank(caller);
-        try liquidacao.proposeSetTaxaSecundarioBps(novaTaxa) returns (uint256 executeAfter) {
+        try settlement.proposeSetTaxaSecundarioBps(novaTaxa) returns (uint256 executeAfter) {
             if (caller != admin) {
                 ghost_unauthorizedGovernanceCallSucceeded = true;
                 return;
             }
-            if (novaTaxa > liquidacao.TAXA_BPS_MAXIMA()) {
-                ghost_taxaExcedeuTetoSucceeded = true;
+            if (novaTaxa > settlement.TAXA_BPS_MAXIMA()) {
+                ghost_feeExceededCapSucceeded = true;
                 return;
             }
             vm.warp(executeAfter);
             vm.prank(admin);
-            liquidacao.executeSetTaxaSecundarioBps(novaTaxa);
-            if (liquidacao.taxaSecundarioBps() > liquidacao.TAXA_BPS_MAXIMA()) {
-                ghost_taxaExcedeuTetoSucceeded = true;
+            settlement.executeSetTaxaSecundarioBps(novaTaxa);
+            if (settlement.taxaSecundarioBps() > settlement.TAXA_BPS_MAXIMA()) {
+                ghost_feeExceededCapSucceeded = true;
             }
         } catch {}
     }
 
-    // ── Views para o InvariantSecundarioTest ───────────────────────────────────────────
+    // ── Views for InvariantSecundarioTest ──────────────────────────────────────────────
 
     function numTokens() external view returns (uint256) {
         return tokens.length;

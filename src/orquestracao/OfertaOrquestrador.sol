@@ -4,16 +4,16 @@ pragma solidity ^0.8.24;
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {TimelockedAccessControl} from "../governance/TimelockedAccessControl.sol";
 
-/// @dev Interfaces mínimas, LOCAIS a este arquivo — deliberadamente não adicionadas a
-/// `src/interfaces/` nem misturadas às interfaces já existentes (`IEmissaoGateway`,
-/// `IParticipacaoTokenFactory`, `IOfertaCaptacao`). Mantém esta fase 100% aditiva: nenhum
-/// arquivo fora de `src/orquestracao/` é criado ou tocado. Cada uma expõe só a função que o
-/// orquestrador realmente chama — mesmo princípio de acoplamento mínimo já usado nas
-/// interfaces compartilhadas do restante do repositório, só que sem relação `is` com o
-/// contrato concreto: a chamada funciona por casamento de seletor ABI (o mesmo mecanismo por
-/// trás de qualquer `IERC20(token).transfer(...)` chamado num token que nunca declarou
-/// `is IERC20`). Nem `ParticipacaoTokenFactory`, nem `EmissaoGateway`, nem `OfertaCaptacaoFactory`
-/// declaram `is` de nenhuma dessas — conferido no código-fonte antes de escrever isto.
+/// @dev Minimal interfaces, LOCAL to this file, deliberately not added to
+/// `src/interfaces/` nor mixed with the existing interfaces (`IEmissaoGateway`,
+/// `IParticipacaoTokenFactory`, `IOfertaCaptacao`). This keeps this phase 100% additive: no
+/// file outside `src/orquestracao/` is created or touched. Each one exposes only the function
+/// the orchestrator actually calls, the same minimal-coupling principle already used in the
+/// repository's shared interfaces, but with no `is` relationship to the concrete contract: the
+/// call works by ABI selector matching (the same mechanism behind any
+/// `IERC20(token).transfer(...)` called on a token that never declared `is IERC20`). Neither
+/// `ParticipacaoTokenFactory`, `EmissaoGateway` nor `OfertaCaptacaoFactory` declares `is` any of
+/// these; checked in the source code before writing this.
 interface ITokenFactoryDoOrquestrador {
     function criarOferta(
         string memory nome,
@@ -43,14 +43,14 @@ interface ICaptacaoFactoryDoOrquestrador {
     ) external returns (address oferta);
 }
 
-/// @dev Espelha `OfertaCaptacao.Estado` só pela representação ABI (enums codificam como
-/// `uint8`, na ordem de declaração) — NÃO foi adicionada a `IOfertaCaptacao.sol` de propósito.
-/// `OfertaCaptacao is IOfertaCaptacao`: estender aquela interface com este enum exigiria que
-/// `OfertaCaptacao` retornasse EXATAMENTE o tipo do enum da interface — Solidity trata enums
-/// de escopos diferentes como tipos distintos, mesmo com os mesmos membros na mesma ordem —
-/// um erro de compilação que só se resolveria editando `OfertaCaptacao.sol`, proibido nesta
-/// fase. Uma interface totalmente local, sem relação `is` com o contrato concreto, evita o
-/// problema por completo (mesmo raciocínio das interfaces acima).
+/// @dev Mirrors `OfertaCaptacao.Estado` only through its ABI representation (enums encode as
+/// `uint8`, in declaration order). It was deliberately NOT added to `IOfertaCaptacao.sol`.
+/// `OfertaCaptacao is IOfertaCaptacao`: extending that interface with this enum would require
+/// `OfertaCaptacao` to return EXACTLY the interface's enum type (Solidity treats enums from
+/// different scopes as distinct types, even with the same members in the same order), a
+/// compile error that could only be solved by editing `OfertaCaptacao.sol`, which is forbidden
+/// in this phase. A fully local interface, with no `is` relationship to the concrete contract,
+/// avoids the problem entirely (same reasoning as the interfaces above).
 interface IOfertaCaptacaoEstadoDoOrquestrador {
     enum Estado {
         Aberta,
@@ -61,91 +61,90 @@ interface IOfertaCaptacaoEstadoDoOrquestrador {
     function estado() external view returns (Estado);
 }
 
-/// @title OfertaOrquestrador
-/// @notice Permite que a própria empresa emissora (autorizada previamente pela plataforma)
-/// crie sua oferta de captação — hoje um privilégio exclusivo do AGENTE — numa única
-/// transação atômica, sem ganhar poder sobre parâmetros sensíveis da plataforma.
-/// @dev PROTÓTIPO EM TESTNET, SEM AUDITORIA EXTERNA. Nenhum contrato existente muda de
-/// comportamento: este contrato apenas encadeia, como qualquer chamador externo poderia,
-/// as quatro chamadas que já existiam (`ParticipacaoTokenFactory.criarOferta` →
-/// `EmissaoGateway.atestarCotas` → `OfertaCaptacaoFactory.criarCaptacao` →
-/// `EmissaoGateway.registrarCaptacao`), detendo `AGENTE_ROLE` nos três contratos-alvo. A
-/// atomicidade não é uma lógica de rollback escrita à mão — é a semântica nativa da EVM: se
-/// qualquer subchamada reverter, a transação inteira (incluindo os `Clones.clone` já
-/// executados) é desfeita.
+/// @title OfertaOrquestrador (offering orchestrator)
+/// @notice Lets the issuing company itself (previously authorized by the platform) create its
+/// fundraising offering, until now an exclusive privilege of the AGENT, in a single atomic
+/// transaction, without gaining power over the platform's sensitive parameters.
+/// @dev TESTNET PROTOTYPE, NO EXTERNAL AUDIT. No existing contract changes behavior: this
+/// contract only chains, as any external caller could, the four calls that already existed
+/// (`ParticipacaoTokenFactory.criarOferta` → `EmissaoGateway.atestarCotas` →
+/// `OfertaCaptacaoFactory.criarCaptacao` → `EmissaoGateway.registrarCaptacao`), holding
+/// `AGENTE_ROLE` on the three target contracts. Atomicity is not hand-written rollback logic;
+/// it is native EVM semantics: if any subcall reverts, the whole transaction (including the
+/// `Clones.clone` calls already executed) is undone.
 ///
-/// Limitação regulatória deliberada, documentada e não resolvida aqui — mesma camada onde já
-/// vive o teto anual do INVESTIDOR (ver `OfertaCaptacao`/`RegistroInvestidorQualificado`): o
-/// teto anual AGREGADO DO EMISSOR previsto na Resolução CVM 88 (captações somadas em TODAS as
-/// plataformas de crowdfunding, não só nesta) é OFF-CHAIN e AUTO-DECLARATÓRIO. Este contrato
-/// não tem, e não pode ter, visibilidade de quanto uma empresa já captou em outra plataforma
-/// no mesmo período — impor esse teto sobre `metaMaxima` desta oferta isolada estaria errado
-/// por construção (uma oferta com teto de R$ 15.000.000 que capta apenas R$ 1.000.000 não
-/// deveria consumir a janela agregada inteira do emissor), e impor sobre `totalArrecadado`
-/// acoplaria este contrato ao ciclo de vida de cada `OfertaCaptacao`, que ele deliberadamente
-/// não acompanha após a criação (só lê `estado()` da última oferta para a trava de "uma aberta
-/// por vez", não para fins de teto financeiro). Nenhuma automação deve descrever
-/// `criarOfertaCompleta`, sozinho, como suficiente para cumprir esse teto agregado.
+/// Deliberate regulatory limitation, documented and not solved here (the same layer where the
+/// INVESTOR's annual cap already lives; see `OfertaCaptacao`/`RegistroInvestidorQualificado`):
+/// the ISSUER's AGGREGATE annual cap set by CVM Resolution 88 (fundraisings summed across ALL
+/// crowdfunding platforms, not only this one) is OFF-CHAIN and SELF-DECLARED. This contract does
+/// not have, and cannot have, visibility into how much a company has already raised on another
+/// platform in the same period. Enforcing that cap on this single offering's `metaMaxima` would
+/// be wrong by construction (an offering capped at R$ 15,000,000 that raises only
+/// R$ 1,000,000 should not consume the issuer's whole aggregate window), and enforcing it on
+/// `totalArrecadado` would couple this contract to each `OfertaCaptacao`'s lifecycle, which it
+/// deliberately does not follow after creation (it only reads the last offering's `estado()`
+/// for the "one open at a time" lock, not for financial-cap purposes). No automation should
+/// describe `criarOfertaCompleta`, on its own, as sufficient to comply with that aggregate cap.
 contract OfertaOrquestrador is TimelockedAccessControl, Pausable {
-    /// @notice Papel operacional: agente/plataforma autorizado a gerir a allowlist de
-    /// emissores e a pausa de emergência do canal self-service.
+    /// @notice Operational role: agent/platform authorized to manage the issuer allowlist and
+    /// the self-service channel's emergency pause.
     bytes32 public constant AGENTE_ROLE = keccak256("AGENTE_ROLE");
 
-    /// @notice Teto de captação por oferta (Resolução CVM 88), na unidade do `MockBRL` (18
-    /// casas, conferido em `src/mocks/MockBRL.sol`) — R$ 15.000.000.
+    /// @notice Fundraising cap per offering (CVM Resolution 88), in `MockBRL` units (18
+    /// decimals, checked in `src/mocks/MockBRL.sol`): R$ 15,000,000.
     uint256 public constant TETO_OFERTA = 15_000_000 ether;
 
-    /// @notice Prazo máximo de uma captação (Resolução CVM 88).
+    /// @notice Maximum duration of a fundraising (CVM Resolution 88).
     uint256 public constant PRAZO_MAXIMO = 180 days;
 
-    /// @notice Lote adicional máximo de 25% sobre `metaMinima`, expresso como razão inteira:
+    /// @notice Maximum additional lot of 25% over `metaMinima`, expressed as an integer ratio:
     /// `metaMaxima * LOTE_ADICIONAL_DENOMINADOR <= metaMinima * LOTE_ADICIONAL_NUMERADOR`.
     uint256 public constant LOTE_ADICIONAL_NUMERADOR = 125;
     uint256 public constant LOTE_ADICIONAL_DENOMINADOR = 100;
 
-    /// @notice `ParticipacaoToken` tem 18 casas — "1 cota inteira" é `1 ether` em unidade
-    /// bruta (mesma convenção de `OfertaCaptacao.UNIDADE_COTA`, ver CLAUDE.md).
+    /// @notice `ParticipacaoToken` has 18 decimals: "1 whole share" is `1 ether` in raw
+    /// units (same convention as `OfertaCaptacao.UNIDADE_COTA`, see CLAUDE.md).
     uint256 public constant UNIDADE_COTA = 1 ether;
 
-    /// @notice Mesmo teto rígido de taxa já usado em `OfertaCaptacao`/`OfertaCaptacaoFactory`/
-    /// `LiquidacaoSecundaria` — independente de todos os outros, ver CLAUDE.md.
+    /// @notice Same hard fee cap already used in `OfertaCaptacao`/`OfertaCaptacaoFactory`/
+    /// `LiquidacaoSecundaria`, independent of all the others; see CLAUDE.md.
     uint256 internal constant TAXA_BPS_MAXIMA = 100;
 
-    /// @notice `ParticipacaoTokenFactory` apontado — fixado na construção, sem setter nesta
-    /// fase (mesma decisão já registrada para `OfertaCaptacaoFactory.gateway`/`registro`/
-    /// `moeda`, ver CLAUDE.md "Pendências conhecidas").
+    /// @notice `ParticipacaoTokenFactory` in use, fixed at construction, with no setter in this
+    /// phase (the same decision already recorded for `OfertaCaptacaoFactory.gateway`/`registro`/
+    /// `moeda`; see CLAUDE.md "Known open items").
     address public immutable tokenFactory;
 
-    /// @notice `EmissaoGateway` apontado — fixado na construção, sem setter nesta fase.
+    /// @notice `EmissaoGateway` in use, fixed at construction, with no setter in this phase.
     address public immutable emissaoGateway;
 
-    /// @notice `OfertaCaptacaoFactory` apontado — fixado na construção, sem setter nesta fase.
+    /// @notice `OfertaCaptacaoFactory` in use, fixed at construction, with no setter in this phase.
     address public immutable captacaoFactory;
 
-    /// @notice Carteira do protocolo usada em toda captação criada por este orquestrador —
-    /// nunca visível nem influenciável pelo emissor. Trocável via timelock.
+    /// @notice Protocol wallet used in every fundraising created by this orchestrator, never
+    /// visible to or influenced by the issuer. Changeable via timelock.
     address public protocoloWallet;
 
-    /// @notice Taxa (bps) usada em toda captação criada por este orquestrador — nunca visível
-    /// nem influenciável pelo emissor. Trocável via timelock, sempre <= `TAXA_BPS_MAXIMA`.
+    /// @notice Fee (bps) used in every fundraising created by this orchestrator, never visible to
+    /// or influenced by the issuer. Changeable via timelock, always <= `TAXA_BPS_MAXIMA`.
     uint256 public taxaBps;
 
-    /// @notice Teto por investidor usado em toda captação criada por este orquestrador — nunca
-    /// visível nem influenciável pelo emissor. Trocável via timelock.
+    /// @notice Per-investor cap used in every fundraising created by this orchestrator, never
+    /// visible to or influenced by the issuer. Changeable via timelock.
     uint256 public tetoPorInvestidor;
 
-    /// @notice `true` para todo endereço autorizado, pelo AGENTE, a criar sua própria oferta.
-    /// Gestão imediata, sem timelock — autorizar um emissor não dá poder sobre dinheiro de
-    /// terceiros, só a capacidade de criar a própria oferta com parâmetros fixados pela
-    /// plataforma (ver PLANO_OFERTA_ORQUESTRADOR.md).
+    /// @notice `true` for every address the AGENT authorized to create its own offering.
+    /// Immediate management, no timelock: authorizing an issuer gives no power over other
+    /// people's money, only the ability to create its own offering with parameters fixed by the
+    /// platform (see PLANO_OFERTA_ORQUESTRADOR.md).
     mapping(address => bool) public emissoresAutorizados;
 
-    /// @notice Todas as ofertas (endereços de `OfertaCaptacao`) já criadas por cada emissor,
-    /// na ordem de criação — histórico completo para reconciliação por emissor.
+    /// @notice Every offering (`OfertaCaptacao` address) created by each issuer, in creation
+    /// order: the full history for per-issuer reconciliation.
     mapping(address => address[]) public ofertasPorEmissor;
 
-    /// @notice Última oferta criada por cada emissor — consultada para impedir uma segunda
-    /// oferta enquanto a anterior estiver `Aberta`.
+    /// @notice The last offering created by each issuer, read to prevent a second offering while
+    /// the previous one is `Aberta` (open).
     mapping(address => address) public ultimaOfertaDoEmissor;
 
     event EmissorAutorizado(address indexed emissor);
@@ -202,7 +201,7 @@ contract OfertaOrquestrador is TimelockedAccessControl, Pausable {
         tetoPorInvestidor = tetoPorInvestidor_;
     }
 
-    // ── Allowlist de emissores (AGENTE_ROLE, imediato — ver decisão travada) ──────────────
+    // ── Issuer allowlist (AGENTE_ROLE, immediate; see the locked decision) ───────────────
 
     function autorizarEmissor(address emissor) external onlyRole(AGENTE_ROLE) {
         if (emissor == address(0)) revert ZeroAddress();
@@ -215,11 +214,11 @@ contract OfertaOrquestrador is TimelockedAccessControl, Pausable {
         emit EmissorRevogado(emissor);
     }
 
-    // ── Pausa de emergência do canal self-service (AGENTE_ROLE, imediata) ─────────────────
-    // `whenNotPaused` vive só em `criarOfertaCompleta`: a pausa desliga a criação self-service
-    // sem afetar a criação manual pela plataforma (as factories têm sua própria pausa
-    // independente) nem qualquer oferta já criada — aporte, encerramento, resgate, reembolso e
-    // liberação seguem funcionando, mesmo princípio de `OfertaCaptacao.pausar` (ver CLAUDE.md).
+    // ── Emergency pause of the self-service channel (AGENTE_ROLE, immediate) ─────────────
+    // `whenNotPaused` lives only on `criarOfertaCompleta`: the pause turns off self-service
+    // creation without affecting manual creation by the platform (the factories have their own
+    // independent pause) or any offering already created. Investment, closing, redemption, refund
+    // and release keep working, the same principle as `OfertaCaptacao.pausar` (see CLAUDE.md).
 
     function pause() external onlyRole(AGENTE_ROLE) {
         _pause();
@@ -229,13 +228,13 @@ contract OfertaOrquestrador is TimelockedAccessControl, Pausable {
         _unpause();
     }
 
-    // ── Criação atômica ─────────────────────────────────────────────────────────────────────
+    // ── Atomic creation ─────────────────────────────────────────────────────────────────────
 
-    /// @notice Cria uma oferta completa (token + captação) para o emissor que chama, com os
-    /// quatro passos de `criarOferta` → `atestarCotas` → `criarCaptacao` → `registrarCaptacao`
-    /// executados atomicamente. `emissorWallet` é sempre `msg.sender` (não é parâmetro);
-    /// `taxaBps`, `protocoloWallet` e `tetoPorInvestidor` vêm sempre do storage deste
-    /// contrato, nunca de calldata do emissor.
+    /// @notice Creates a complete offering (token + fundraising) for the calling issuer, with the
+    /// four steps `criarOferta` → `atestarCotas` → `criarCaptacao` → `registrarCaptacao`
+    /// executed atomically. `emissorWallet` is always `msg.sender` (not a parameter);
+    /// `taxaBps`, `protocoloWallet` and `tetoPorInvestidor` always come from this contract's
+    /// storage, never from the issuer's calldata.
     function criarOfertaCompleta(
         string memory nome,
         string memory simbolo,
@@ -259,10 +258,10 @@ contract OfertaOrquestrador is TimelockedAccessControl, Pausable {
             }
         }
 
-        // `precoPorCota == 0` precisa reverter ANTES do módulo abaixo — em ^0.8, `x % 0`
-        // reverte com Panic(0x12), opaco e intraduzível no frontend. O check nomeado das
-        // factories a jusante (`OfertaCaptacaoFactory.PrecoInvalido`) nunca seria alcançado,
-        // porque o pânico dispara primeiro, então precisa ser checado aqui também.
+        // `precoPorCota == 0` must revert BEFORE the modulo below: in ^0.8, `x % 0` reverts
+        // with Panic(0x12), which is opaque and cannot be translated in the frontend. The named
+        // check in the downstream factories (`OfertaCaptacaoFactory.PrecoInvalido`) would never be
+        // reached, because the panic fires first, so it must be checked here too.
         if (precoPorCota == 0) revert PrecoInvalido();
         if (prazo <= block.timestamp) revert PrazoInvalido(prazo);
         if (prazo - block.timestamp > PRAZO_MAXIMO) revert PrazoExcedeLimite(prazo, PRAZO_MAXIMO);
@@ -271,11 +270,11 @@ contract OfertaOrquestrador is TimelockedAccessControl, Pausable {
             revert LoteAdicionalExcedeLimite(metaMaxima, metaMinima);
         }
         if (metaMaxima % precoPorCota != 0) revert PrecoNaoDivideMetaMaxima(metaMaxima, precoPorCota);
-        // `metaMinima == 0` / `metaMinima > metaMaxima` NÃO são reverificados aqui de propósito:
-        // `OfertaCaptacaoFactory.criarCaptacao` já reverte com `MetasInvalidas` nesses casos, e
-        // qualquer revert numa subchamada desfaz atomicamente as subchamadas já executadas —
-        // duplicar a checagem não fecharia lacuna nenhuma, só repetiria lógica já garantida a
-        // jusante (ver CLAUDE.md, princípio já seguido nas fases anteriores).
+        // `metaMinima == 0` / `metaMinima > metaMaxima` are deliberately NOT rechecked here:
+        // `OfertaCaptacaoFactory.criarCaptacao` already reverts with `MetasInvalidas` in those cases,
+        // and any revert in a subcall atomically undoes the subcalls already executed. Duplicating
+        // the check would close no gap; it would only repeat logic already guaranteed downstream
+        // (see CLAUDE.md, a principle already followed in the earlier phases).
 
         token = ITokenFactoryDoOrquestrador(tokenFactory).criarOferta(nome, simbolo, empresa, cnpjRef, serie);
 
@@ -294,12 +293,12 @@ contract OfertaOrquestrador is TimelockedAccessControl, Pausable {
         emit OfertaCompletaCriada(msg.sender, token, oferta, metaMinima, metaMaxima, precoPorCota, prazo);
     }
 
-    /// @notice Número total de ofertas já criadas por `emissor`, desde o início.
+    /// @notice Total number of offerings `emissor` has created since the start.
     function numOfertasDoEmissor(address emissor) external view returns (uint256) {
         return ofertasPorEmissor[emissor].length;
     }
 
-    // ── Parâmetros de plataforma (DEFAULT_ADMIN_ROLE, timelock) ───────────────────────────
+    // ── Platform parameters (DEFAULT_ADMIN_ROLE, timelock) ───────────────────────────────
 
     function proposeSetProtocoloWallet(address novo)
         external
@@ -327,11 +326,11 @@ contract OfertaOrquestrador is TimelockedAccessControl, Pausable {
         emit TaxaBpsChangeProposed(novaTaxaBps, executeAfter);
     }
 
-    /// @dev Repete a checagem do teto no `execute`, não só no `propose` — mesma lição já
-    /// aplicada em `LiquidacaoSecundaria.executeSetTaxaSecundarioBps` (ver CLAUDE.md,
-    /// "Conferência contra NiaraSettlement"): sem isso, chamar `execute` diretamente, sem um
-    /// `propose` correspondente, ainda reverteria em `_consumeAction` (nenhuma ação pendente)
-    /// — mas por segurança em profundidade, o teto é validado nos dois lugares.
+    /// @dev Repeats the cap check in `execute`, not only in `propose`, the same lesson already
+    /// applied in `LiquidacaoSecundaria.executeSetTaxaSecundarioBps` (see CLAUDE.md,
+    /// "Cross-check against NiaraSettlement"): without it, calling `execute` directly, with no
+    /// matching `propose`, would still revert in `_consumeAction` (no pending action), but as
+    /// defense in depth the cap is validated in both places.
     function executeSetTaxaBps(uint256 novaTaxaBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (novaTaxaBps > TAXA_BPS_MAXIMA) revert TaxaExcedeMaximo(novaTaxaBps, TAXA_BPS_MAXIMA);
         bytes32 actionId = keccak256(abi.encode("SET_TAXA_BPS", novaTaxaBps));

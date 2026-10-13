@@ -8,13 +8,12 @@ import {EmissaoGateway} from "../src/emissao/EmissaoGateway.sol";
 import {DenyAllTransferPolicy} from "../src/policies/DenyAllTransferPolicy.sol";
 import {Handler} from "./invariant/Handler.sol";
 
-/// @notice Testes de invariante com fuzzing stateful (Foundry `invariant_*`): o `Handler`
-/// executa sequências aleatórias de criarOferta/atestarCotas/emitir/tentativas de
-/// transferência/tentativas de burlar acesso, disparadas por atores diferentes (agente e três
-/// investidores), e as funções abaixo verificam que os invariantes centrais da plataforma se
-/// mantêm após CADA chamada da sequência. Escala: `runs=256 * depth=100` (ver
-/// `[invariant]` em foundry.toml) = 25.600 chamadas por rodada, espelhando deliberadamente a
-/// escala usada em `niara-contracts` (ver Linhagem no CLAUDE.md).
+/// @notice Stateful fuzzing invariant tests (Foundry `invariant_*`): the `Handler` runs random
+/// sequences of criarOferta/atestarCotas/emitir/transfer attempts/access-bypass attempts,
+/// triggered by different actors (agent and three investors), and the functions below check
+/// that the platform's core invariants hold after EVERY call in the sequence. Scale:
+/// `runs=256 * depth=100` (see `[invariant]` in foundry.toml) = 25,600 calls per run,
+/// deliberately mirroring the scale used in `niara-contracts` (see Lineage in CLAUDE.md).
 contract InvariantTest is Test {
     ParticipacaoTokenFactory public factory;
     ParticipacaoToken public implementacao;
@@ -23,7 +22,7 @@ contract InvariantTest is Test {
     Handler public handler;
 
     address public admin = makeAddr("admin");
-    address public agente = makeAddr("agente");
+    address public agent = makeAddr("agente");
 
     uint256 public constant TIMELOCK_DELAY = 1 hours;
 
@@ -42,8 +41,8 @@ contract InvariantTest is Test {
     }
 
     function _wireRoles() internal {
-        _grantRoleOn(address(gateway), gateway.AGENTE_ROLE(), agente);
-        _grantRoleOn(address(factory), factory.AGENTE_ROLE(), agente);
+        _grantRoleOn(address(gateway), gateway.AGENTE_ROLE(), agent);
+        _grantRoleOn(address(factory), factory.AGENTE_ROLE(), agent);
     }
 
     function _deployHandler() internal {
@@ -53,7 +52,7 @@ contract InvariantTest is Test {
         actors[2] = makeAddr("investidor3");
 
         handler = new Handler(
-            Handler.Config({factory: factory, gateway: gateway, admin: admin, agente: agente, actors: actors})
+            Handler.Config({factory: factory, gateway: gateway, admin: admin, agent: agent, actors: actors})
         );
 
         targetContract(address(handler));
@@ -65,12 +64,12 @@ contract InvariantTest is Test {
         selectors[0] = Handler.criarOferta.selector;
         selectors[1] = Handler.atestarCotas.selector;
         selectors[2] = Handler.emitir.selector;
-        selectors[3] = Handler.pausarOuDespausarToken.selector;
-        selectors[4] = Handler.pausarOuDespausarFactory.selector;
-        selectors[5] = Handler.tentarTransferir.selector;
-        selectors[6] = Handler.tentarTransferirFrom.selector;
-        selectors[7] = Handler.tentarChamarRestritaNoToken.selector;
-        selectors[8] = Handler.tentarReinicializar.selector;
+        selectors[3] = Handler.pauseOrUnpauseToken.selector;
+        selectors[4] = Handler.pauseOrUnpauseFactory.selector;
+        selectors[5] = Handler.tryTransfer.selector;
+        selectors[6] = Handler.tryTransferFrom.selector;
+        selectors[7] = Handler.tryCallRestrictedOnToken.selector;
+        selectors[8] = Handler.tryReinitialize.selector;
     }
 
     function _grantRoleOn(address target, bytes32 role, address account) internal {
@@ -83,7 +82,7 @@ contract InvariantTest is Test {
         require(ok2, "execute failed");
     }
 
-    // ── Invariante central: totalSupply <= cotasAutorizadas, para todo token criado ───────
+    // ── Core invariant: totalSupply <= cotasAutorizadas, for every token created ─────────
 
     function invariant_TotalSupplyNeverExceedsCotasAutorizadas() public view {
         uint256 n = handler.numTokens();
@@ -93,7 +92,7 @@ contract InvariantTest is Test {
         }
     }
 
-    // ── Invariante: sum(saldos) == totalSupply, para todo token criado ───────────────────
+    // ── Invariant: sum(balances) == totalSupply, for every token created ─────────────────
 
     function invariant_SumOfBalancesEqualsTotalSupply() public view {
         uint256 nTokens = handler.numTokens();
@@ -119,13 +118,13 @@ contract InvariantTest is Test {
         assertFalse(handler.ghost_unauthorizedRoleCallSucceeded());
     }
 
-    // ── Invariante: nenhuma transferência titular→titular passa (política nega-tudo) ─────
+    // ── Invariant: no holder→holder transfer goes through (deny-all policy) ──────────────
 
     function invariant_NoTransferEverSucceeded() public view {
         assertFalse(handler.ghost_transferSucceeded());
     }
 
-    // ── Invariante: nenhum clone é reinicializável ────────────────────────────────────────
+    // ── Invariant: no clone can be reinitialized ──────────────────────────────────────────
 
     function invariant_NoReinitializeEverSucceeded() public view {
         assertFalse(handler.ghost_reinitializeSucceeded());

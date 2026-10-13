@@ -4,18 +4,18 @@ pragma solidity ^0.8.24;
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 /// @title MockBRL
-/// @notice MOCK DE TESTE — NÃO É DINHEIRO REAL, NÃO TEM LASTRO E NÃO REPRESENTA O REAL
-/// brasileiro. Existe apenas para simular, em testnet, a moeda usada no escrow de aportes
-/// das ofertas (a integração de escrow chega na Fase 2). `mint` é público e irrestrito de
-/// propósito — não usar fora de ambiente de teste/demonstração.
-/// @dev Usa 18 casas decimais (padrão ERC-20), não as 2 casas usuais do BRL fiat — decisão
-/// documentada no CLAUDE.md ("Decisões travadas"). Simplicidade e compatibilidade com o
-/// restante do sistema (ParticipacaoToken também usa 18 casas) pesaram mais do que espelhar
-/// a formatação usual de centavos, já que este mock não é a fonte de verdade de valor algum.
+/// @notice TEST MOCK: NOT REAL MONEY, NOT BACKED AND NOT REPRESENTING THE BRAZILIAN
+/// REAL. It exists only to simulate, on testnet, the currency used in the offerings'
+/// investment escrow (escrow integration arrives in Phase 2). `mint` is public and
+/// unrestricted on purpose; do not use it outside a test/demo environment.
+/// @dev Uses 18 decimals (ERC-20 standard), not the usual 2 decimals of fiat BRL, a decision
+/// documented in CLAUDE.md ("Locked decisions"). Simplicity and compatibility with the rest of
+/// the system (ParticipacaoToken also uses 18 decimals) outweighed mirroring the usual cents
+/// formatting, since this mock is not the source of truth for any value.
 contract MockBRL is ERC20 {
     constructor() ERC20("Mock Real Brasileiro", "mBRL") {}
 
-    /// @notice Cunha `amount` de mBRL para `to`. Irrestrito — só para uso em testes.
+    /// @notice Mints `amount` mBRL to `to`. Unrestricted: for test use only.
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
     }

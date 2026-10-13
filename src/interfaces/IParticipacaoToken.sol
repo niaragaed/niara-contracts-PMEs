@@ -2,12 +2,12 @@
 pragma solidity ^0.8.24;
 
 /// @title IParticipacaoToken
-/// @notice Interface consumida por `ParticipacaoTokenFactory` (para inicializar clones) e por
-/// `EmissaoGateway` (para atestar/emitir/pausar), sem que esses contratos precisem depender do
-/// tipo concreto `ParticipacaoToken` nem da lib upgradeable.
+/// @notice Interface used by `ParticipacaoTokenFactory` (to initialize clones) and by
+/// `EmissaoGateway` (to attest/issue/pause), without those contracts depending on the
+/// concrete `ParticipacaoToken` type or on the upgradeable lib.
 interface IParticipacaoToken {
-    /// @notice Inicializa o clone recém-criado (roda no clone, nunca no template — ver
-    /// `ParticipacaoToken._disableInitializers` no construtor da implementação).
+    /// @notice Initializes the newly created clone (runs on the clone, never on the template; see
+    /// `ParticipacaoToken._disableInitializers` in the implementation's constructor).
     function initialize(
         string memory nome_,
         string memory simbolo_,
@@ -18,18 +18,18 @@ interface IParticipacaoToken {
         string memory serie_
     ) external;
 
-    /// @notice Eleva (nunca reduz) o teto de cotas autorizadas — a atestação societária.
+    /// @notice Raises (never lowers) the authorized share cap: the corporate attestation.
     function setCotasAutorizadas(uint256 novoTeto) external;
 
-    /// @notice Cunha cotas para `to`, respeitando `totalSupply() + amount <= cotasAutorizadas`.
+    /// @notice Mints shares to `to`, respecting `totalSupply() + amount <= cotasAutorizadas`.
     function mint(address to, uint256 amount) external;
 
-    /// @notice Troca a política de transferência consultada em toda transferência
-    /// titular→titular (ver `ParticipacaoToken.setTransferPolicy`, Fase 3).
+    /// @notice Changes the transfer policy read on every holder→holder transfer
+    /// (see `ParticipacaoToken.setTransferPolicy`, Phase 3).
     function setTransferPolicy(address novaPolitica) external;
 
-    /// @notice Política vigente, consultada em toda transferência titular→titular (Fase 4:
-    /// `LiquidacaoSecundaria` usa este getter para o pre-flight de `canTransfer`).
+    /// @notice Current policy, read on every holder→holder transfer (Phase 4:
+    /// `LiquidacaoSecundaria` uses this getter for the `canTransfer` pre-flight).
     function transferPolicy() external view returns (address);
 
     function pause() external;

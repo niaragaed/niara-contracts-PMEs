@@ -2,12 +2,12 @@
 pragma solidity ^0.8.24;
 
 /// @title IOfertaCaptacao
-/// @notice Interface consumida por `OfertaCaptacaoFactory` para inicializar o clone recém
-/// criado, sem que a factory precise depender do tipo concreto `OfertaCaptacao` nem da cadeia
-/// de imports de `PausableUpgradeable`/`ReentrancyGuard`.
+/// @notice Interface used by `OfertaCaptacaoFactory` to initialize the newly created clone,
+/// without the factory depending on the concrete `OfertaCaptacao` type or on the
+/// `PausableUpgradeable`/`ReentrancyGuard` import chain.
 interface IOfertaCaptacao {
-    /// @dev Agrupado em struct (em vez de 12 parâmetros soltos) para evitar "stack too deep"
-    /// no `initialize` — `via_ir` está desligado neste projeto (ver foundry.toml).
+    /// @dev Grouped in a struct (instead of 12 loose parameters) to avoid "stack too deep"
+    /// in `initialize`; `via_ir` is off in this project (see foundry.toml).
     struct InitParams {
         address token;
         address gateway;
@@ -23,7 +23,7 @@ interface IOfertaCaptacao {
         uint256 taxaBps;
     }
 
-    /// @notice Inicializa o clone recém-criado (roda no clone, nunca no template — ver
-    /// `OfertaCaptacao._disableInitializers` no construtor da implementação).
+    /// @notice Initializes the newly created clone (runs on the clone, never on the template; see
+    /// `OfertaCaptacao._disableInitializers` in the implementation's constructor).
     function initialize(InitParams calldata params) external;
 }

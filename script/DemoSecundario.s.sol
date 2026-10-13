@@ -8,112 +8,112 @@ import {ParticipacaoToken} from "../src/token/ParticipacaoToken.sol";
 import {EmissaoGateway} from "../src/emissao/EmissaoGateway.sol";
 import {LiquidacaoSecundaria} from "../src/secundario/LiquidacaoSecundaria.sol";
 
-/// @title DemoSecundario
-/// @notice Parte 3/3 (o clímax) da demo pública do secundário em Sepolia — rodar só depois de
-/// `DemoSecundarioPreparar.s.sol` e de >= 1h de tempo REAL terem decorrido (o lock-up de 10min
-/// já terá expirado dentro dessa janela). Executa a migração de política do token +  abertura
-/// do secundário propostas na parte 2, financia o comprador em `MockBRL`, colhe as duas
-/// allowances (vendedor→cotas, comprador→MockBRL) e fecha a cessão via
-/// `LiquidacaoSecundaria.liquidarCessao` — a troca atômica.
-/// @dev Antes de rodar este script, opcionalmente rode via `cast send` uma tentativa de
-/// `ParticipacaoToken.transfer` do vendedor para o comprador (deve reverter, prova pública de
-/// que a restrição é real antes de abrir o secundário) — não está embutido aqui de propósito,
-/// é um artefato point-in-time que faz mais sentido como comando avulso documentado no registro
-/// da demo, não como parte do fluxo programático.
+/// @title DemoSecundario (secondary market demo)
+/// @notice Part 3/3 (the climax) of the public secondary-market demo on Sepolia. Run only after
+/// `DemoSecundarioPreparar.s.sol` and after >= 1h of REAL time has passed (the 10-minute
+/// lock-up will have expired within that window). Executes the token's policy migration +
+/// secondary-market opening proposed in part 2, funds the buyer in `MockBRL`, collects the two
+/// allowances (seller→shares, buyer→MockBRL) and closes the assignment via
+/// `LiquidacaoSecundaria.liquidarCessao`, the atomic swap.
+/// @dev Before running this script, optionally run via `cast send` a
+/// `ParticipacaoToken.transfer` attempt from seller to buyer (it must revert: public proof
+/// that the restriction is real before opening the secondary market). It is deliberately not
+/// built in here: it is a point-in-time artifact that makes more sense as a standalone command
+/// documented in the demo record than as part of the programmatic flow.
 contract DemoSecundario is Script {
     string internal constant OUTPUT_PATH = "./script/output/demo-secundario.json";
 
-    uint256 internal constant PRECO_POR_COTA = 100 ether;
-    uint256 internal constant QUANTIDADE_CESSAO = 20 ether; // 20 cotas
-    uint256 internal constant VALOR_CESSAO = 2_000 ether; // 20 * 100
+    uint256 internal constant PRICE_PER_SHARE = 100 ether;
+    uint256 internal constant ASSIGNMENT_QUANTITY = 20 ether; // 20 shares
+    uint256 internal constant ASSIGNMENT_AMOUNT = 2_000 ether; // 20 * 100
 
     struct Config {
         uint256 deployerPk;
-        uint256 vendedorPk;
-        uint256 compradorPk;
+        uint256 sellerPk;
+        uint256 buyerPk;
         address deployer;
-        address vendedor;
-        address comprador;
-        address protocoloWallet;
+        address seller;
+        address buyer;
+        address protocolWallet;
     }
 
     struct Infra {
-        MockBRL moeda;
+        MockBRL currency;
         RestrictedTransferPolicy restricted;
         EmissaoGateway gateway;
-        LiquidacaoSecundaria liquidacao;
+        LiquidacaoSecundaria settlement;
         ParticipacaoToken token;
     }
 
     function run() external {
         Config memory cfg = _readConfig();
-        Infra memory infra = _lerEnderecos();
+        Infra memory infra = _readAddresses();
 
         console2.log("== DemoSecundario (climax) ==");
         console2.log("Token:", address(infra.token));
-        console2.log("Vendedor:", cfg.vendedor);
-        console2.log("Comprador:", cfg.comprador);
+        console2.log("Seller:", cfg.seller);
+        console2.log("Buyer:", cfg.buyer);
 
         vm.startBroadcast(cfg.deployerPk);
-        _abrirSecundario(infra);
-        infra.moeda.mint(cfg.comprador, VALOR_CESSAO);
+        _openSecondary(infra);
+        infra.currency.mint(cfg.buyer, ASSIGNMENT_AMOUNT);
         vm.stopBroadcast();
 
-        vm.startBroadcast(cfg.compradorPk);
-        infra.moeda.approve(address(infra.liquidacao), VALOR_CESSAO);
+        vm.startBroadcast(cfg.buyerPk);
+        infra.currency.approve(address(infra.settlement), ASSIGNMENT_AMOUNT);
         vm.stopBroadcast();
 
-        vm.startBroadcast(cfg.vendedorPk);
-        infra.token.approve(address(infra.liquidacao), QUANTIDADE_CESSAO);
+        vm.startBroadcast(cfg.sellerPk);
+        infra.token.approve(address(infra.settlement), ASSIGNMENT_QUANTITY);
         vm.stopBroadcast();
 
         vm.startBroadcast(cfg.deployerPk);
-        uint256 taxaCobrada =
-            infra.liquidacao.liquidarCessao(address(infra.token), cfg.vendedor, cfg.comprador, QUANTIDADE_CESSAO, PRECO_POR_COTA);
+        uint256 feeCharged =
+            infra.settlement.liquidarCessao(address(infra.token), cfg.seller, cfg.buyer, ASSIGNMENT_QUANTITY, PRICE_PER_SHARE);
         vm.stopBroadcast();
 
-        _logResultados(infra, cfg, taxaCobrada);
+        _logResults(infra, cfg, feeCharged);
     }
 
-    // ── Configuração ────────────────────────────────────────────────────────────────────
+    // ── Configuration ───────────────────────────────────────────────────────────────────
 
     function _readConfig() internal view returns (Config memory cfg) {
         cfg.deployerPk = vm.envUint("PRIVATE_KEY");
-        cfg.vendedorPk = vm.envUint("INVESTIDOR1_PRIVATE_KEY");
-        cfg.compradorPk = vm.envUint("INVESTIDOR2_PRIVATE_KEY");
+        cfg.sellerPk = vm.envUint("INVESTIDOR1_PRIVATE_KEY");
+        cfg.buyerPk = vm.envUint("INVESTIDOR2_PRIVATE_KEY");
         cfg.deployer = vm.addr(cfg.deployerPk);
-        cfg.vendedor = vm.addr(cfg.vendedorPk);
-        cfg.comprador = vm.addr(cfg.compradorPk);
-        cfg.protocoloWallet = vm.envAddress("PROTOCOLO_WALLET_ADDRESS");
+        cfg.seller = vm.addr(cfg.sellerPk);
+        cfg.buyer = vm.addr(cfg.buyerPk);
+        cfg.protocolWallet = vm.envAddress("PROTOCOLO_WALLET_ADDRESS");
     }
 
-    function _lerEnderecos() internal returns (Infra memory infra) {
+    function _readAddresses() internal returns (Infra memory infra) {
         string memory json = vm.readFile(OUTPUT_PATH);
-        infra.moeda = MockBRL(vm.parseJsonAddress(json, ".moeda"));
+        infra.currency = MockBRL(vm.parseJsonAddress(json, ".currency"));
         infra.restricted = RestrictedTransferPolicy(vm.parseJsonAddress(json, ".restricted"));
         infra.gateway = EmissaoGateway(vm.parseJsonAddress(json, ".gateway"));
-        infra.liquidacao = LiquidacaoSecundaria(vm.parseJsonAddress(json, ".liquidacao"));
+        infra.settlement = LiquidacaoSecundaria(vm.parseJsonAddress(json, ".liquidacao"));
         infra.token = ParticipacaoToken(vm.parseJsonAddress(json, ".token"));
     }
 
-    // ── Execução da migração de política + abertura propostas em DemoSecundarioPreparar ──
+    // ── Execution of the policy migration + opening proposed in DemoSecundarioPreparar ──
 
-    function _abrirSecundario(Infra memory infra) internal {
+    function _openSecondary(Infra memory infra) internal {
         infra.gateway.executeSetTransferPolicy(address(infra.token), address(infra.restricted));
         infra.restricted.executeSetSecundarioLiberado(address(infra.token), true);
     }
 
-    // ── Logs (ver também a leitura independente via `cast call` no registro da demo) ────
+    // ── Logs (see also the independent `cast call` reading in the demo record) ───────────
 
-    function _logResultados(Infra memory infra, Config memory cfg, uint256 taxaCobrada) internal view {
+    function _logResults(Infra memory infra, Config memory cfg, uint256 feeCharged) internal view {
         console2.log("");
         console2.log("== Cessao liquidada ==");
-        console2.log("Taxa cobrada (deve ser 0, taxa dormente):", taxaCobrada);
+        console2.log("Fee charged (should be 0, fee dormant):", feeCharged);
         console2.log("");
-        console2.log("Cotas do vendedor (deve ser 30 ether = 30 cotas):", infra.token.balanceOf(cfg.vendedor));
-        console2.log("Cotas do comprador (deve ser 20 ether = 20 cotas):", infra.token.balanceOf(cfg.comprador));
-        console2.log("MockBRL do vendedor (deve ser 2000 ether, taxa 0):", infra.moeda.balanceOf(cfg.vendedor));
-        console2.log("MockBRL do comprador (deve ser 0, pagou tudo):", infra.moeda.balanceOf(cfg.comprador));
-        console2.log("MockBRL do protocolo (deve ser 0, taxa dormente):", infra.moeda.balanceOf(cfg.protocoloWallet));
+        console2.log("Seller shares (should be 30 ether = 30 shares):", infra.token.balanceOf(cfg.seller));
+        console2.log("Buyer shares (should be 20 ether = 20 shares):", infra.token.balanceOf(cfg.buyer));
+        console2.log("Seller MockBRL (should be 2000 ether, fee 0):", infra.currency.balanceOf(cfg.seller));
+        console2.log("Buyer MockBRL (should be 0, paid everything):", infra.currency.balanceOf(cfg.buyer));
+        console2.log("Protocol MockBRL (should be 0, fee dormant):", infra.currency.balanceOf(cfg.protocolWallet));
     }
 }

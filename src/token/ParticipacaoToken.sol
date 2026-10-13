@@ -7,39 +7,39 @@ import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/Pau
 import {ITransferPolicy} from "../interfaces/ITransferPolicy.sol";
 import {IParticipacaoToken} from "../interfaces/IParticipacaoToken.sol";
 
-/// @title ParticipacaoToken
-/// @notice Cota de participação de uma oferta (Resolução CVM 88), clonada via EIP-1167 a
-/// partir de uma implementação única por `ParticipacaoTokenFactory` — um clone por oferta.
-/// Nunca é cunhada além do teto de cotas autorizadas nos atos societários da empresa,
-/// atestado pelo `EmissaoGateway` (ver invariante em `mint`). Secundário desligado por padrão
-/// via `ITransferPolicy` plugável.
-/// @dev PROTÓTIPO EM TESTNET, SEM AUDITORIA EXTERNA. Este registro on-chain é prova
-/// complementar — NÃO substitui os livros societários exigidos pela Lei 6.404/76 nem o
-/// registro em cartório/junta comercial. É um token de valor mobiliário sob a Resolução CVM
-/// 88, com transferência secundária restrita por política plugável (nega-tudo nesta fase).
+/// @title ParticipacaoToken (participation share token)
+/// @notice An offering's participation share (CVM Resolution 88), cloned via EIP-1167 from a
+/// single implementation by `ParticipacaoTokenFactory`: one clone per offering. It is never
+/// minted beyond the cap of shares authorized in the company's corporate acts, attested by
+/// the `EmissaoGateway` (see the invariant in `mint`). Secondary market off by default via a
+/// pluggable `ITransferPolicy`.
+/// @dev TESTNET PROTOTYPE, NO EXTERNAL AUDIT. This on-chain record is complementary evidence:
+/// it does NOT replace the corporate books required by Law 6,404/76 nor registration with a
+/// notary/commercial registry. It is a security token under CVM Resolution 88, with secondary
+/// transfers restricted by a pluggable policy (deny-all in this phase).
 ///
-/// Clones EIP-1167 não executam o construtor da implementação — por isso nome/símbolo e
-/// metadados são definidos em `initialize()` (que roda no clone), não no construtor. A
-/// implementação-template chama `_disableInitializers()` no construtor para nunca poder ser
-/// inicializada diretamente.
+/// EIP-1167 clones do not run the implementation's constructor, so name/symbol and metadata
+/// are set in `initialize()` (which runs on the clone), not in the constructor. The template
+/// implementation calls `_disableInitializers()` in its constructor so it can never be
+/// initialized directly.
 contract ParticipacaoToken is Initializable, ERC20Upgradeable, PausableUpgradeable, IParticipacaoToken {
-    /// @notice Teto de cotas autorizadas nos atos societários — atestado pelo `gateway`.
-    /// Invariante central: `totalSupply() <= cotasAutorizadas`, sempre.
+    /// @notice Cap of shares authorized in the corporate acts, attested by the `gateway`.
+    /// Core invariant: `totalSupply() <= cotasAutorizadas`, always.
     uint256 public cotasAutorizadas;
 
-    /// @notice Endereço autorizado a atestar cotas e cunhar (o `EmissaoGateway`).
+    /// @notice Address authorized to attest shares and mint (the `EmissaoGateway`).
     address public gateway;
 
-    /// @notice Política consultada em toda transferência titular→titular.
+    /// @notice Policy read on every holder→holder transfer.
     address public transferPolicy;
 
-    /// @notice Razão social ou nome fantasia da empresa emissora.
+    /// @notice Legal or trade name of the issuing company.
     string public empresa;
 
-    /// @notice Hash/referência do CNPJ da empresa — sem PII em claro on-chain.
+    /// @notice Hash/reference of the company's CNPJ: no plaintext PII on-chain.
     bytes32 public cnpjRef;
 
-    /// @notice Identificador da série/rodada de captação (ex.: "2026-A").
+    /// @notice Identifier of the fundraising series/round (e.g. "2026-A").
     string public serie;
 
     event CotasAutorizadasAlteradas(uint256 tetoAntigo, uint256 tetoNovo);
@@ -52,8 +52,8 @@ contract ParticipacaoToken is Initializable, ERC20Upgradeable, PausableUpgradeab
     error MintExcedeCotasAutorizadas(uint256 totalSolicitado, uint256 cotasAutorizadas);
     error TransferenciaNaoPermitida();
 
-    /// @dev Trava a implementação-template — só clones inicializados via `initialize` são
-    /// utilizáveis.
+    /// @dev Locks the template implementation: only clones initialized via `initialize` are
+    /// usable.
     constructor() {
         _disableInitializers();
     }
@@ -63,8 +63,8 @@ contract ParticipacaoToken is Initializable, ERC20Upgradeable, PausableUpgradeab
         _;
     }
 
-    /// @notice Inicializa o clone (roda uma única vez, no clone). `cotasAutorizadas` começa
-    /// em zero — a primeira atestação eleva o teto antes de qualquer mint ser possível.
+    /// @notice Initializes the clone (runs once, on the clone). `cotasAutorizadas` starts at
+    /// zero: the first attestation raises the cap before any mint is possible.
     function initialize(
         string memory nome_,
         string memory simbolo_,
@@ -86,9 +86,9 @@ contract ParticipacaoToken is Initializable, ERC20Upgradeable, PausableUpgradeab
         serie = serie_;
     }
 
-    /// @notice Eleva o teto de cotas autorizadas (atestação societária). Política desta fase:
-    /// o teto só pode aumentar — reduzir cotas autorizadas já emitidas exigiria um processo
-    /// societário próprio (ex.: redução de capital), fora do escopo deste contrato.
+    /// @notice Raises the authorized share cap (corporate attestation). Policy in this phase:
+    /// the cap can only increase; reducing authorized shares already issued would require its own
+    /// corporate process (e.g. a capital reduction), outside the scope of this contract.
     function setCotasAutorizadas(uint256 novoTeto) external onlyGateway {
         if (novoTeto < cotasAutorizadas) revert CotasAutorizadasNaoPodemDiminuir(cotasAutorizadas, novoTeto);
         uint256 tetoAntigo = cotasAutorizadas;
@@ -96,11 +96,11 @@ contract ParticipacaoToken is Initializable, ERC20Upgradeable, PausableUpgradeab
         emit CotasAutorizadasAlteradas(tetoAntigo, novoTeto);
     }
 
-    /// @notice Cunha `amount` de cotas para `to`, desde que o total emitido resultante não
-    /// exceda `cotasAutorizadas`.
-    /// @dev Esta checagem é estrutural: vive neste contrato, não apenas no controle de acesso
-    /// de quem chama — mesmo que `onlyGateway` fosse contornado, a trava contra diluição além
-    /// do atestado permaneceria.
+    /// @notice Mints `amount` shares to `to`, as long as the resulting total supply does not
+    /// exceed `cotasAutorizadas`.
+    /// @dev This check is structural: it lives in this contract, not only in the caller's
+    /// access control. Even if `onlyGateway` were bypassed, the lock against dilution beyond what
+    /// was attested would remain.
     function mint(address to, uint256 amount) external onlyGateway {
         uint256 totalSolicitado = totalSupply() + amount;
         if (totalSolicitado > cotasAutorizadas) revert MintExcedeCotasAutorizadas(totalSolicitado, cotasAutorizadas);
@@ -108,13 +108,13 @@ contract ParticipacaoToken is Initializable, ERC20Upgradeable, PausableUpgradeab
         emit CotasEmitidas(to, amount);
     }
 
-    /// @notice Troca a política de transferência consultada em toda transferência
-    /// titular→titular. Não existia até a Fase 3 — adicionada aqui (em vez de só na factory,
-    /// que só afeta ofertas futuras) para permitir trocar a política de uma oferta já viva,
-    /// ex.: sair de `DenyAllTransferPolicy` para `RestrictedTransferPolicy` quando a captação
-    /// já está encerrada. Restrita ao `gateway`, que só a expõe via
-    /// `EmissaoGateway.proposeSetTransferPolicy`/`executeSetTransferPolicy` (timelock — trocar
-    /// política é decisão sensível, ver CLAUDE.md).
+    /// @notice Changes the transfer policy read on every holder→holder transfer. It did not
+    /// exist until Phase 3; it was added here (instead of only in the factory, which only affects
+    /// future offerings) to allow changing the policy of an already-live offering, e.g. moving
+    /// from `DenyAllTransferPolicy` to `RestrictedTransferPolicy` once the fundraising has closed.
+    /// Restricted to the `gateway`, which only exposes it via
+    /// `EmissaoGateway.proposeSetTransferPolicy`/`executeSetTransferPolicy` (timelock: changing
+    /// the policy is a sensitive decision, see CLAUDE.md).
     function setTransferPolicy(address novaPolitica) external onlyGateway {
         if (novaPolitica == address(0)) revert ZeroAddress();
         address politicaAntiga = transferPolicy;
@@ -130,8 +130,8 @@ contract ParticipacaoToken is Initializable, ERC20Upgradeable, PausableUpgradeab
         _unpause();
     }
 
-    /// @dev Mint/burn (`from`/`to` == address(0)) passam direto. Transferência titular→titular
-    /// consulta `transferPolicy` — nesta fase, `DenyAllTransferPolicy` sempre nega.
+    /// @dev Mint/burn (`from`/`to` == address(0)) go straight through. A holder→holder transfer
+    /// reads `transferPolicy`; in this phase, `DenyAllTransferPolicy` always denies.
     function _update(address from, address to, uint256 value) internal override whenNotPaused {
         if (from != address(0) && to != address(0)) {
             if (!ITransferPolicy(transferPolicy).canTransfer(address(this), from, to, value)) {

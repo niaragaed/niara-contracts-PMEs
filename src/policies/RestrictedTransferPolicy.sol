@@ -5,42 +5,42 @@ import {TimelockedAccessControl} from "../governance/TimelockedAccessControl.sol
 import {ITransferPolicy} from "../interfaces/ITransferPolicy.sol";
 
 /// @title RestrictedTransferPolicy
-/// @notice Política sofisticada da Fase 3: lock-up + allowlist de investidor elegível + flag
-/// mestre de liberação do secundário. Compartilhada entre todos os tokens que apontarem para
-/// ela — todo o estado é mantido por `token` (ver `ITransferPolicy.canTransfer`, que já recebe
-/// o endereço do token na assinatura), então uma única instância deste contrato serve qualquer
-/// número de ofertas sem precisar de clonagem.
-/// @dev PROTÓTIPO EM TESTNET, SEM AUDITORIA EXTERNA. Modela a restrição de mercado secundário
-/// exigida pela Resolução CVM 88 — ligar o secundário DE VERDADE depende de prazo cumprido E de
-/// autorização da plataforma, uma decisão de governança/negócio que este contrato apenas
-/// executa (via `setSecundarioLiberado`, atrás de timelock); a substância dessa decisão (o
-/// "pode" regulatório/contratual) é sempre externa ao código.
+/// @notice Phase 3's sophisticated policy: lock-up + eligible-investor allowlist + master
+/// flag that opens the secondary market. Shared by every token that points at it: all state is
+/// kept per `token` (see `ITransferPolicy.canTransfer`, which already receives the token address
+/// in its signature), so a single instance of this contract serves any number of offerings with
+/// no cloning.
+/// @dev TESTNET PROTOTYPE, NO EXTERNAL AUDIT. Models the secondary-market restriction required by
+/// CVM Resolution 88: REALLY turning on the secondary market depends on the period having elapsed
+/// AND on authorization from the platform, a governance/business decision this contract only
+/// executes (via `setSecundarioLiberado`, behind a timelock); the substance of that decision
+/// (the regulatory/contractual "may") is always external to the code.
 ///
-/// `canTransfer` só é chamada pelo token em transferências titular→titular — mint/burn não
-/// passam por aqui (ver `ParticipacaoToken._update`). O parâmetro `from` não é usado na lógica:
-/// quem já detém o token é titular por construção (só chegou lá via mint), então a única
-/// checagem de elegibilidade que importa é sobre o destinatário (`to`), que é quem a CVM 88
-/// exige que seja investidor ativo.
+/// `canTransfer` is only called by the token on holder→holder transfers; mint/burn do not go
+/// through here (see `ParticipacaoToken._update`). The `from` parameter is not used in the
+/// logic: whoever already holds the token is a holder by construction (it only got there via
+/// mint), so the only eligibility check that matters is on the recipient (`to`), who is the
+/// one CVM 88 requires to be an active investor.
 contract RestrictedTransferPolicy is TimelockedAccessControl, ITransferPolicy {
-    /// @notice Mesmo papel operacional das demais peças da plataforma — allowlist/lock-up
-    /// precisam de onboarding ágil, sem timelock na ação em si (a gestão de quem detém o papel
-    /// continua passando pelo timelock herdado).
+    /// @notice Same operational role as the platform's other pieces: allowlist/lock-up need
+    /// agile onboarding, with no timelock on the action itself (managing who holds the role still
+    /// goes through the inherited timelock).
     bytes32 public constant AGENTE_ROLE = keccak256("AGENTE_ROLE");
 
-    /// @notice `true` uma vez que `definirLockup(token, ...)` já foi chamado — torna o campo
-    /// abaixo "set-once" sem depender de um valor sentinela ambíguo (um lock-up de `0`
-    /// segundos, ou seja "sem carência", também é uma configuração válida).
+    /// @notice `true` once `definirLockup(token, ...)` has been called: makes the field below
+    /// "set-once" without depending on an ambiguous sentinel value (a lock-up of `0` seconds,
+    /// i.e. "no lock-up", is also a valid configuration).
     mapping(address => bool) public lockupDefinido;
 
-    /// @notice Timestamp a partir do qual transferências titular→titular de `token` deixam de
-    /// ser barradas pela carência (ainda sujeitas às demais condições).
+    /// @notice Timestamp from which holder→holder transfers of `token` stop being blocked by the
+    /// lock-up (still subject to the other conditions).
     mapping(address => uint64) public lockupAte;
 
-    /// @notice `true` se `investidor` está na allowlist de destinatário elegível para `token`.
+    /// @notice `true` if `investidor` is on the eligible-recipient allowlist for `token`.
     mapping(address => mapping(address => bool)) public elegivel;
 
-    /// @notice Flag mestre por token — secundário desligado (`false`) por padrão. Ligar é ato
-    /// de governança (timelock), não operacional.
+    /// @notice Master flag per token: the secondary market is off (`false`) by default. Turning
+    /// it on is a governance act (timelock), not an operational one.
     mapping(address => bool) public secundarioLiberado;
 
     event ElegibilidadeAlterada(address indexed token, address indexed investidor, bool elegivel);
@@ -56,9 +56,9 @@ contract RestrictedTransferPolicy is TimelockedAccessControl, ITransferPolicy {
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
     }
 
-    /// @notice Verifica se uma transferência titular→titular de `token` é permitida: exige (1)
-    /// secundário liberado, (2) fora da carência de lock-up e (3) destinatário elegível — nessa
-    /// ordem, todas necessárias.
+    /// @notice Checks whether a holder→holder transfer of `token` is allowed: requires (1) the
+    /// secondary market open, (2) outside the lock-up period and (3) an eligible recipient, in
+    /// that order, all required.
     function canTransfer(address token, address, address to, uint256) external view returns (bool) {
         if (!secundarioLiberado[token]) return false;
         if (block.timestamp < lockupAte[token]) return false;
@@ -68,15 +68,15 @@ contract RestrictedTransferPolicy is TimelockedAccessControl, ITransferPolicy {
 
     // ── Operacional (AGENTE, imediato) ─────────────────────────────────────────────────────
 
-    /// @notice Define se `investidor` é destinatário elegível de transferências de `token`.
+    /// @notice Sets whether `investidor` is an eligible recipient of `token` transfers.
     function definirElegivel(address token, address investidor, bool estaElegivel) external onlyRole(AGENTE_ROLE) {
         elegivel[token][investidor] = estaElegivel;
         emit ElegibilidadeAlterada(token, investidor, estaElegivel);
     }
 
-    /// @notice Define a carência de `token`, uma única vez — o "prazo gravado na oferta".
-    /// Qualquer alteração posterior a essa primeira definição exigiria um mecanismo à parte
-    /// (não existe nesta fase): o prazo, uma vez fixado, é para valer.
+    /// @notice Sets `token`'s lock-up, only once: the "deadline written into the offering".
+    /// Any later change to that first setting would require a separate mechanism (none exists in
+    /// this phase): once fixed, the period is final.
     function definirLockup(address token, uint64 novoLockupAte) external onlyRole(AGENTE_ROLE) {
         if (lockupDefinido[token]) revert LockupJaDefinido(lockupAte[token]);
         lockupDefinido[token] = true;
@@ -84,7 +84,7 @@ contract RestrictedTransferPolicy is TimelockedAccessControl, ITransferPolicy {
         emit LockupDefinido(token, novoLockupAte);
     }
 
-    // ── Governado por timelock (decisão sensível: abre o secundário de fato) ──────────────
+    // ── Governed by timelock (sensitive decision: actually opens the secondary market) ──────
 
     function proposeSetSecundarioLiberado(address token, bool liberado)
         external
