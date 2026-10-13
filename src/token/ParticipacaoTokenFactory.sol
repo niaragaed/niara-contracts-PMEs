@@ -7,32 +7,32 @@ import {TimelockedAccessControl} from "../governance/TimelockedAccessControl.sol
 import {IParticipacaoToken} from "../interfaces/IParticipacaoToken.sol";
 
 /// @title ParticipacaoTokenFactory
-/// @notice Cria uma oferta (um `ParticipacaoToken` clonado via EIP-1167) por chamada,
-/// apontando o `EmissaoGateway` e a política de transferência padrão vigentes. Mantém o
-/// registro de ofertas criadas — a linhagem probatória de cap tables desta plataforma.
-/// @dev Clones EIP-1167 não executam construtor: `Clones.clone(implementacao)` seguido de
-/// `initialize(...)` no clone é a sequência correta. A implementação-template deve ter
-/// `_disableInitializers()` no próprio construtor (ver `ParticipacaoToken`), do contrário
-/// alguém poderia inicializar o template diretamente.
+/// @notice Creates one offering (a `ParticipacaoToken` cloned via EIP-1167) per call, pointing at
+/// the current `EmissaoGateway` and default transfer policy. Keeps the record of created
+/// offerings: the evidentiary lineage of this platform's cap tables.
+/// @dev EIP-1167 clones do not run a constructor: `Clones.clone(implementacao)` followed by
+/// `initialize(...)` on the clone is the correct sequence. The template implementation must
+/// have `_disableInitializers()` in its own constructor (see `ParticipacaoToken`); otherwise
+/// someone could initialize the template directly.
 contract ParticipacaoTokenFactory is TimelockedAccessControl, Pausable {
-    /// @notice Papel operacional: agente/plataforma autorizado a criar ofertas e pausar a
+    /// @notice Operational role: agent/platform authorized to create offerings and pause the
     /// factory.
     bytes32 public constant AGENTE_ROLE = keccak256("AGENTE_ROLE");
 
-    /// @notice Endereço da implementação (template) clonada em cada nova oferta.
+    /// @notice Address of the implementation (template) cloned for each new offering.
     address public implementacao;
 
-    /// @notice `EmissaoGateway` apontado como `gateway` em todo novo clone.
+    /// @notice `EmissaoGateway` set as `gateway` on every new clone.
     address public gateway;
 
-    /// @notice Política de transferência apontada em todo novo clone (Fase 1:
+    /// @notice Transfer policy set on every new clone (Phase 1:
     /// `DenyAllTransferPolicy`).
     address public transferPolicyPadrao;
 
-    /// @notice Todas as ofertas (tokens) já criadas, na ordem de criação.
+    /// @notice Every offering (token) created so far, in creation order.
     address[] public ofertas;
 
-    /// @notice `true` para todo endereço de token criado por esta factory.
+    /// @notice `true` for every token address created by this factory.
     mapping(address => bool) public isOferta;
 
     event OfertaCriada(address indexed token, string empresa, bytes32 indexed cnpjRef, string serie);
@@ -62,8 +62,8 @@ contract ParticipacaoTokenFactory is TimelockedAccessControl, Pausable {
         transferPolicyPadrao = transferPolicyPadrao_;
     }
 
-    /// @notice Cria uma nova oferta: clona `implementacao` e a inicializa apontando o
-    /// `gateway` e a `transferPolicyPadrao` vigentes.
+    /// @notice Creates a new offering: clones `implementacao` and initializes it pointing at the
+    /// current `gateway` and `transferPolicyPadrao`.
     function criarOferta(
         string memory nome,
         string memory simbolo,
@@ -80,7 +80,7 @@ contract ParticipacaoTokenFactory is TimelockedAccessControl, Pausable {
         emit OfertaCriada(token, empresa, cnpjRef, serie);
     }
 
-    /// @notice Número total de ofertas já criadas.
+    /// @notice Total number of offerings created so far.
     function numOfertas() external view returns (uint256) {
         return ofertas.length;
     }
@@ -93,7 +93,7 @@ contract ParticipacaoTokenFactory is TimelockedAccessControl, Pausable {
         _unpause();
     }
 
-    // ── Troca de implementação (sujeita a timelock — afeta só ofertas futuras) ────────────
+    // ── Implementation swap (subject to the timelock; only affects future offerings) ───────
 
     function proposeSetImplementacao(address novaImplementacao)
         external
@@ -114,7 +114,7 @@ contract ParticipacaoTokenFactory is TimelockedAccessControl, Pausable {
         emit ImplementacaoChanged(implementacaoAntiga, novaImplementacao);
     }
 
-    // ── Troca da política de transferência padrão (sujeita a timelock — afeta só ofertas futuras) ──
+    // ── Default transfer policy change (subject to the timelock; only affects future offerings) ──
 
     function proposeSetTransferPolicyPadrao(address novaPolitica)
         external

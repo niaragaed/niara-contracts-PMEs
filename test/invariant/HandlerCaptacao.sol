@@ -11,114 +11,113 @@ import {ParticipacaoToken} from "../../src/token/ParticipacaoToken.sol";
 import {DenyAllTransferPolicy} from "../../src/policies/DenyAllTransferPolicy.sol";
 import {MockBRL} from "../../src/mocks/MockBRL.sol";
 
-/// @notice Ator de fuzzing stateful do domínio de captação (Fase 2): expõe uma ação por função
-/// pública (criar captação, aportar, avançar tempo, encerrar, definir qualificação, cancelar,
-/// resgatar cotas, liberar para o emissor, reembolsar) mais tentativas deliberadas de burlar
-/// guardas (`tentar*`), mesmo desenho de `test/invariant/Handler.sol` da Fase 1 (ver Linhagem
-/// no CLAUDE.md): a maioria das chamadas usa parâmetros limitados a estados válidos; as
-/// `tentar*` tomam de propósito o caminho inválido, sem try/catch — só viram "ghost" `true`
-/// quando uma chamada que DEVERIA reverter termina sem reverter.
+/// @notice Stateful fuzzing actor for the fundraising domain (Phase 2): exposes one action per
+/// public function (create fundraising, invest, advance time, close, set qualification, cancel,
+/// redeem shares, release to the issuer, refund) plus deliberate attempts to bypass guards
+/// (`tentar*`), same design as Phase 1's `test/invariant/Handler.sol` (see Lineage in
+/// CLAUDE.md): most calls use parameters bounded to valid states; the `tentar*` ones take the
+/// invalid path on purpose, without try/catch, and only flip a "ghost" to `true` when a call
+/// that SHOULD revert ends without reverting.
 contract HandlerCaptacao is Test {
     OfertaCaptacaoFactory public factory;
     EmissaoGateway public gateway;
     RegistroInvestidorQualificado public registro;
     MockBRL public moeda;
-    ParticipacaoToken public tokenImplementacao;
+    ParticipacaoToken public tokenImplementation;
     DenyAllTransferPolicy public policy;
 
     address public admin;
-    address public agente;
+    address public agent;
     address public emissorWallet;
     address public protocoloWallet;
     address[] public actors;
 
-    address[] public captacoesList;
+    address[] public fundraisingList;
 
-    /// @notice Soma dos reembolsos já pagos, por captação — usada para checar a contabilidade
-    /// do escrow (`moeda.balanceOf(oferta) == totalArrecadado - sumReembolsado`, quando não
-    /// liberado).
-    mapping(address => uint256) public ghost_sumReembolsado;
+    /// @notice Sum of refunds already paid, per fundraising, used to check escrow accounting
+    /// (`moeda.balanceOf(oferta) == totalArrecadado - sumReembolsado`, when not released).
+    mapping(address => uint256) public ghost_sumRefunded;
 
-    /// @notice Soma das cotas já mintadas via resgate, por captação — não pode exceder
+    /// @notice Sum of shares already minted via redemption, per fundraising; it cannot exceed
     /// `totalArrecadado / precoPorCota`.
-    mapping(address => uint256) public ghost_sumCotasMintadas;
+    mapping(address => uint256) public ghost_sumSharesMinted;
 
-    /// @notice `true` se algum reembolso já ocorreu naquela captação.
-    mapping(address => bool) public ghost_houveReembolso;
+    /// @notice `true` if any refund has already happened in that fundraising.
+    mapping(address => bool) public ghost_hadRefund;
 
-    /// @notice `true` se algum resgate de cotas ou liberação ao emissor já ocorreu naquela
-    /// captação — mutuamente exclusivo com `ghost_houveReembolso` (sucesso XOR fracasso).
-    mapping(address => bool) public ghost_houveMintOuLiberacao;
+    /// @notice `true` if any share redemption or release to the issuer has already happened in
+    /// that fundraising; mutually exclusive with `ghost_hadRefund` (success XOR failure).
+    mapping(address => bool) public ghost_hadMintOrRelease;
 
-    /// @notice Vira `true` se `cancelar`/`definirQualificado`/`criarCaptacao` forem
-    /// bem-sucedidos chamados por alguém sem `AGENTE_ROLE`.
+    /// @notice Becomes `true` if `cancelar`/`definirQualificado`/`criarCaptacao` succeed when
+    /// called by someone without `AGENTE_ROLE`.
     bool public ghost_unauthorizedActionSucceeded;
 
-    /// @notice Vira `true` se um segundo `resgatarCotas` do mesmo investidor for bem-sucedido.
-    bool public ghost_doubleResgateSucceeded;
+    /// @notice Becomes `true` if a second `resgatarCotas` by the same investor succeeds.
+    bool public ghost_doubleRedeemSucceeded;
 
-    /// @notice Vira `true` se um segundo `reembolsar` do mesmo investidor for bem-sucedido.
-    bool public ghost_doubleReembolsoSucceeded;
+    /// @notice Becomes `true` if a second `reembolsar` by the same investor succeeds.
+    bool public ghost_doubleRefundSucceeded;
 
-    /// @notice Vira `true` se um segundo `liberarParaEmissor` for bem-sucedido.
-    bool public ghost_doubleLiberacaoSucceeded;
+    /// @notice Becomes `true` if a second `liberarParaEmissor` succeeds.
+    bool public ghost_doubleReleaseSucceeded;
 
-    /// @notice Vira `true` se `aportar` suceder fora do estado `Aberta` ou após o prazo.
-    bool public ghost_aportarForaDoEstadoSucceeded;
+    /// @notice Becomes `true` if `aportar` succeeds outside the `Aberta` state or after the deadline.
+    bool public ghost_investOutOfStateSucceeded;
 
-    /// @notice Vira `true` se `encerrar` suceder antes do prazo e antes da meta máxima.
-    bool public ghost_encerramentoPrematuroSucceeded;
+    /// @notice Becomes `true` if `encerrar` succeeds before the deadline and before the maximum target.
+    bool public ghost_prematureCloseSucceeded;
 
-    /// @notice Vira `true` se um investidor NÃO qualificado conseguir, numa única chamada de
-    /// `aportar`, ultrapassar `tetoPorInvestidor`. Testado no momento da chamada (não como
-    /// snapshot retroativo) porque qualificação é uma flag mutável: um investidor pode
-    /// legitimamente ficar acima do teto vigente se foi qualificado no momento do aporte e
-    /// desqualificado depois — isso não é um bug, é ausência de confisco retroativo.
-    bool public ghost_tetoBypassSucceeded;
+    /// @notice Becomes `true` if a NON-qualified investor manages, in a single `aportar` call, to
+    /// exceed `tetoPorInvestidor`. Tested at call time (not as a retroactive snapshot) because
+    /// qualification is a mutable flag: an investor can legitimately be above the current cap if
+    /// they were qualified at the time of investing and disqualified later. That is not a bug;
+    /// it is the absence of retroactive confiscation.
+    bool public ghost_capBypassSucceeded;
 
     struct Config {
         OfertaCaptacaoFactory factory;
         EmissaoGateway gateway;
-        RegistroInvestidorQualificado registro;
-        MockBRL moeda;
-        ParticipacaoToken tokenImplementacao;
+        RegistroInvestidorQualificado registry;
+        MockBRL currency;
+        ParticipacaoToken tokenImplementation;
         DenyAllTransferPolicy policy;
         address admin;
-        address agente;
-        address emissorWallet;
-        address protocoloWallet;
+        address agent;
+        address issuerWallet;
+        address protocolWallet;
         address[] actors;
     }
 
     constructor(Config memory config) {
         factory = config.factory;
         gateway = config.gateway;
-        registro = config.registro;
-        moeda = config.moeda;
-        tokenImplementacao = config.tokenImplementacao;
+        registro = config.registry;
+        moeda = config.currency;
+        tokenImplementation = config.tokenImplementation;
         policy = config.policy;
         admin = config.admin;
-        agente = config.agente;
-        emissorWallet = config.emissorWallet;
-        protocoloWallet = config.protocoloWallet;
+        agent = config.agent;
+        emissorWallet = config.issuerWallet;
+        protocoloWallet = config.protocolWallet;
         actors = config.actors;
     }
 
-    // ── Helpers de seleção ─────────────────────────────────────────────────────────────
+    // ── Selection helpers ──────────────────────────────────────────────────────────────
 
     function _actorAt(uint256 seed) internal view returns (address) {
         return actors[seed % actors.length];
     }
 
-    function _pickCaptacao(uint256 seed) internal view returns (OfertaCaptacao) {
-        return OfertaCaptacao(captacoesList[seed % captacoesList.length]);
+    function _pickFundraising(uint256 seed) internal view returns (OfertaCaptacao) {
+        return OfertaCaptacao(fundraisingList[seed % fundraisingList.length]);
     }
 
     function _chaos(uint256 seed) internal pure returns (bool) {
         return seed % 5 == 0;
     }
 
-    function _garantirFundos(address investidor, address oferta, uint256 valor) internal {
+    function _ensureFunds(address investidor, address oferta, uint256 valor) internal {
         if (moeda.balanceOf(investidor) < valor) {
             moeda.mint(investidor, valor + 1_000_000 ether);
         }
@@ -128,64 +127,64 @@ contract HandlerCaptacao is Test {
         }
     }
 
-    // ── Criação de captações ────────────────────────────────────────────────────────────
+    // ── Fundraising creation ────────────────────────────────────────────────────────────
 
-    function criarCaptacaoEToken(
-        uint256 metaMaximaSeed,
-        uint256 metaMinimaSeed,
-        uint256 precoSeed,
-        uint256 prazoSeed,
-        uint256 tetoSeed,
-        uint256 taxaSeed,
+    function createFundraisingAndToken(
+        uint256 maxTargetSeed,
+        uint256 minTargetSeed,
+        uint256 priceSeed,
+        uint256 deadlineSeed,
+        uint256 capSeed,
+        uint256 feeSeed,
         uint256 chaosSeed
     ) external {
-        uint256[3] memory precos = [uint256(1 ether), uint256(10 ether), uint256(100 ether)];
-        uint256 precoPorCota = precos[precoSeed % 3];
+        uint256[3] memory prices = [uint256(1 ether), uint256(10 ether), uint256(100 ether)];
+        uint256 precoPorCota = prices[priceSeed % 3];
 
-        uint256 metaMaxima = bound(metaMaximaSeed, precoPorCota * 10, precoPorCota * 10_000);
-        uint256 metaMinima = bound(metaMinimaSeed, precoPorCota, metaMaxima);
-        uint256 prazo = block.timestamp + bound(prazoSeed, 1 days, 60 days);
-        uint256 tetoPorInvestidor = bound(tetoSeed, precoPorCota, metaMaxima);
-        uint256 taxaBps = bound(taxaSeed, 0, 100);
+        uint256 metaMaxima = bound(maxTargetSeed, precoPorCota * 10, precoPorCota * 10_000);
+        uint256 metaMinima = bound(minTargetSeed, precoPorCota, metaMaxima);
+        uint256 prazo = block.timestamp + bound(deadlineSeed, 1 days, 60 days);
+        uint256 tetoPorInvestidor = bound(capSeed, precoPorCota, metaMaxima);
+        uint256 taxaBps = bound(feeSeed, 0, 100);
 
-        address token = Clones.clone(address(tokenImplementacao));
+        address token = Clones.clone(address(tokenImplementation));
         ParticipacaoToken(token).initialize(
             "Oferta Captacao", "nCAP", address(gateway), address(policy), "Empresa Captacao", bytes32(0), "2026-A"
         );
 
-        vm.prank(agente);
+        vm.prank(agent);
         gateway.atestarCotas(token, (metaMaxima / precoPorCota) * 1 ether);
 
-        address caller = _chaos(chaosSeed) ? _actorAt(chaosSeed) : agente;
+        address caller = _chaos(chaosSeed) ? _actorAt(chaosSeed) : agent;
 
         vm.prank(caller);
         address oferta = factory.criarCaptacao(
             token, metaMinima, metaMaxima, precoPorCota, prazo, tetoPorInvestidor, taxaBps, emissorWallet, protocoloWallet
         );
 
-        if (caller != agente) {
+        if (caller != agent) {
             ghost_unauthorizedActionSucceeded = true;
             return;
         }
 
-        captacoesList.push(oferta);
+        fundraisingList.push(oferta);
 
-        vm.prank(agente);
+        vm.prank(agent);
         gateway.registrarCaptacao(token, oferta);
     }
 
-    // ── Aporte ──────────────────────────────────────────────────────────────────────────
+    // ── Investment ──────────────────────────────────────────────────────────────────────
 
-    function aportar(uint256 capSeed, uint256 investorSeed, uint256 qtdCotasSeed) external {
-        if (captacoesList.length == 0) return;
-        OfertaCaptacao oferta = _pickCaptacao(capSeed);
+    function aportar(uint256 capSeed, uint256 investorSeed, uint256 shareCountSeed) external {
+        if (fundraisingList.length == 0) return;
+        OfertaCaptacao oferta = _pickFundraising(capSeed);
         address investidor = _actorAt(investorSeed);
 
         uint256 precoPorCota = oferta.precoPorCota();
-        uint256 qtdCotas = bound(qtdCotasSeed, 1, 20);
-        uint256 valor = qtdCotas * precoPorCota;
+        uint256 shareCount = bound(shareCountSeed, 1, 20);
+        uint256 valor = shareCount * precoPorCota;
 
-        _garantirFundos(investidor, address(oferta), valor);
+        _ensureFunds(investidor, address(oferta), valor);
 
         vm.prank(investidor);
         try oferta.aportar(valor) {} catch {}
@@ -193,176 +192,176 @@ contract HandlerCaptacao is Test {
 
     // ── Tempo ───────────────────────────────────────────────────────────────────────────
 
-    function avancarTempo(uint256 seed) external {
+    function advanceTime(uint256 seed) external {
         vm.warp(block.timestamp + bound(seed, 1, 10 days));
     }
 
     // ── Encerramento ────────────────────────────────────────────────────────────────────
 
     function encerrar(uint256 capSeed) external {
-        if (captacoesList.length == 0) return;
-        OfertaCaptacao oferta = _pickCaptacao(capSeed);
+        if (fundraisingList.length == 0) return;
+        OfertaCaptacao oferta = _pickFundraising(capSeed);
         try oferta.encerrar() {} catch {}
     }
 
-    function tentarEncerrarPrematuramente(uint256 capSeed) external {
-        if (captacoesList.length == 0) return;
-        OfertaCaptacao oferta = _pickCaptacao(capSeed);
+    function tryClosePrematurely(uint256 capSeed) external {
+        if (fundraisingList.length == 0) return;
+        OfertaCaptacao oferta = _pickFundraising(capSeed);
         if (oferta.estado() != OfertaCaptacao.Estado.Aberta) return;
         if (block.timestamp >= oferta.prazo()) return;
         if (oferta.totalArrecadado() == oferta.metaMaxima()) return;
 
         oferta.encerrar();
-        ghost_encerramentoPrematuroSucceeded = true;
+        ghost_prematureCloseSucceeded = true;
     }
 
-    // ── Qualificação ────────────────────────────────────────────────────────────────────
+    // ── Qualification ───────────────────────────────────────────────────────────────────
 
-    function definirQualificado(uint256 investorSeed, uint256 qualificadoSeed, uint256 chaosSeed) external {
+    function definirQualificado(uint256 investorSeed, uint256 qualifiedSeed, uint256 chaosSeed) external {
         address investidor = _actorAt(investorSeed);
-        bool qualificado = qualificadoSeed % 2 == 0;
-        address caller = _chaos(chaosSeed) ? investidor : agente;
+        bool qualificado = qualifiedSeed % 2 == 0;
+        address caller = _chaos(chaosSeed) ? investidor : agent;
 
         vm.prank(caller);
         registro.definirQualificado(investidor, qualificado);
 
-        if (caller != agente) ghost_unauthorizedActionSucceeded = true;
+        if (caller != agent) ghost_unauthorizedActionSucceeded = true;
     }
 
     // ── Cancelamento ────────────────────────────────────────────────────────────────────
 
     function cancelar(uint256 capSeed, uint256 chaosSeed) external {
-        if (captacoesList.length == 0) return;
-        OfertaCaptacao oferta = _pickCaptacao(capSeed);
-        address caller = _chaos(chaosSeed) ? _actorAt(chaosSeed) : agente;
+        if (fundraisingList.length == 0) return;
+        OfertaCaptacao oferta = _pickFundraising(capSeed);
+        address caller = _chaos(chaosSeed) ? _actorAt(chaosSeed) : agent;
 
         vm.prank(caller);
         try oferta.cancelar() {
-            if (caller != agente) ghost_unauthorizedActionSucceeded = true;
+            if (caller != agent) ghost_unauthorizedActionSucceeded = true;
         } catch {}
     }
 
     // ── Reembolso ───────────────────────────────────────────────────────────────────────
 
     function reembolsar(uint256 capSeed, uint256 investorSeed) external {
-        if (captacoesList.length == 0) return;
-        OfertaCaptacao oferta = _pickCaptacao(capSeed);
+        if (fundraisingList.length == 0) return;
+        OfertaCaptacao oferta = _pickFundraising(capSeed);
         address investidor = _actorAt(investorSeed);
         uint256 aportado = oferta.aportadoPor(investidor);
 
         vm.prank(investidor);
         try oferta.reembolsar() {
-            ghost_sumReembolsado[address(oferta)] += aportado;
-            ghost_houveReembolso[address(oferta)] = true;
+            ghost_sumRefunded[address(oferta)] += aportado;
+            ghost_hadRefund[address(oferta)] = true;
         } catch {}
     }
 
-    function tentarReembolsarDuasVezes(uint256 capSeed, uint256 investorSeed) external {
-        if (captacoesList.length == 0) return;
-        OfertaCaptacao oferta = _pickCaptacao(capSeed);
+    function tryRefundTwice(uint256 capSeed, uint256 investorSeed) external {
+        if (fundraisingList.length == 0) return;
+        OfertaCaptacao oferta = _pickFundraising(capSeed);
         address investidor = _actorAt(investorSeed);
         if (oferta.estado() != OfertaCaptacao.Estado.EncerradaFalha) return;
         if (!oferta.reembolsado(investidor)) return;
 
         vm.prank(investidor);
         oferta.reembolsar();
-        ghost_doubleReembolsoSucceeded = true;
+        ghost_doubleRefundSucceeded = true;
     }
 
-    // ── Resgate de cotas ────────────────────────────────────────────────────────────────
+    // ── Share redemption ────────────────────────────────────────────────────────────────
 
     function resgatarCotas(uint256 capSeed, uint256 investorSeed) external {
-        if (captacoesList.length == 0) return;
-        OfertaCaptacao oferta = _pickCaptacao(capSeed);
+        if (fundraisingList.length == 0) return;
+        OfertaCaptacao oferta = _pickFundraising(capSeed);
         address investidor = _actorAt(investorSeed);
         uint256 aportado = oferta.aportadoPor(investidor);
         uint256 precoPorCota = oferta.precoPorCota();
 
         vm.prank(investidor);
         try oferta.resgatarCotas() {
-            ghost_sumCotasMintadas[address(oferta)] += aportado / precoPorCota;
-            ghost_houveMintOuLiberacao[address(oferta)] = true;
+            ghost_sumSharesMinted[address(oferta)] += aportado / precoPorCota;
+            ghost_hadMintOrRelease[address(oferta)] = true;
         } catch {}
     }
 
-    function tentarResgatarDuasVezes(uint256 capSeed, uint256 investorSeed) external {
-        if (captacoesList.length == 0) return;
-        OfertaCaptacao oferta = _pickCaptacao(capSeed);
+    function tryRedeemTwice(uint256 capSeed, uint256 investorSeed) external {
+        if (fundraisingList.length == 0) return;
+        OfertaCaptacao oferta = _pickFundraising(capSeed);
         address investidor = _actorAt(investorSeed);
         if (oferta.estado() != OfertaCaptacao.Estado.EncerradaSucesso) return;
         if (!oferta.cotasResgatadas(investidor)) return;
 
         vm.prank(investidor);
         oferta.resgatarCotas();
-        ghost_doubleResgateSucceeded = true;
+        ghost_doubleRedeemSucceeded = true;
     }
 
-    // ── Liberação para o emissor ────────────────────────────────────────────────────────
+    // ── Release to the issuer ───────────────────────────────────────────────────────────
 
     function liberarParaEmissor(uint256 capSeed) external {
-        if (captacoesList.length == 0) return;
-        OfertaCaptacao oferta = _pickCaptacao(capSeed);
+        if (fundraisingList.length == 0) return;
+        OfertaCaptacao oferta = _pickFundraising(capSeed);
 
         try oferta.liberarParaEmissor() {
-            ghost_houveMintOuLiberacao[address(oferta)] = true;
+            ghost_hadMintOrRelease[address(oferta)] = true;
         } catch {}
     }
 
-    function tentarLiberarDuasVezes(uint256 capSeed) external {
-        if (captacoesList.length == 0) return;
-        OfertaCaptacao oferta = _pickCaptacao(capSeed);
+    function tryReleaseTwice(uint256 capSeed) external {
+        if (fundraisingList.length == 0) return;
+        OfertaCaptacao oferta = _pickFundraising(capSeed);
         if (!oferta.recursosLiberados()) return;
 
         oferta.liberarParaEmissor();
-        ghost_doubleLiberacaoSucceeded = true;
+        ghost_doubleReleaseSucceeded = true;
     }
 
-    // ── Tentativa de aportar fora do estado válido ─────────────────────────────────────
+    // ── Attempt to invest outside the valid state ──────────────────────────────────────
 
-    function tentarAportarForaDoEstado(uint256 capSeed, uint256 investorSeed) external {
-        if (captacoesList.length == 0) return;
-        OfertaCaptacao oferta = _pickCaptacao(capSeed);
+    function tryInvestOutOfState(uint256 capSeed, uint256 investorSeed) external {
+        if (fundraisingList.length == 0) return;
+        OfertaCaptacao oferta = _pickFundraising(capSeed);
         address investidor = _actorAt(investorSeed);
 
-        bool aberta = oferta.estado() == OfertaCaptacao.Estado.Aberta;
-        bool dentroDoPrazo = block.timestamp < oferta.prazo();
-        if (aberta && dentroDoPrazo) return; // nada de inválido para testar agora
+        bool open_ = oferta.estado() == OfertaCaptacao.Estado.Aberta;
+        bool withinDeadline = block.timestamp < oferta.prazo();
+        if (open_ && withinDeadline) return; // nothing invalid to test right now
 
         uint256 valor = oferta.precoPorCota();
-        _garantirFundos(investidor, address(oferta), valor);
+        _ensureFunds(investidor, address(oferta), valor);
 
         vm.prank(investidor);
         oferta.aportar(valor);
-        ghost_aportarForaDoEstadoSucceeded = true;
+        ghost_investOutOfStateSucceeded = true;
     }
 
-    function tentarExcederTetoSemQualificacao(uint256 capSeed, uint256 investorSeed) external {
-        if (captacoesList.length == 0) return;
-        OfertaCaptacao oferta = _pickCaptacao(capSeed);
+    function tryExceedCapWithoutQualification(uint256 capSeed, uint256 investorSeed) external {
+        if (fundraisingList.length == 0) return;
+        OfertaCaptacao oferta = _pickFundraising(capSeed);
         address investidor = _actorAt(investorSeed);
         if (registro.ehQualificado(investidor)) return;
         if (oferta.estado() != OfertaCaptacao.Estado.Aberta) return;
         if (block.timestamp >= oferta.prazo()) return;
 
         uint256 teto = oferta.tetoPorInvestidor();
-        uint256 jaAportado = oferta.aportadoPor(investidor);
-        if (jaAportado > teto) return; // já acima do teto por desqualificação posterior — não testável aqui
+        uint256 alreadyInvested = oferta.aportadoPor(investidor);
+        if (alreadyInvested > teto) return; // already above the cap due to later disqualification; not testable here
 
         uint256 precoPorCota = oferta.precoPorCota();
-        uint256 valor = ((teto - jaAportado) / precoPorCota + 1) * precoPorCota; // excede o teto em >= 1 cota
-        if (oferta.totalArrecadado() + valor > oferta.metaMaxima()) return; // não confundir com o outro guard
+        uint256 valor = ((teto - alreadyInvested) / precoPorCota + 1) * precoPorCota; // exceeds the cap by >= 1 share
+        if (oferta.totalArrecadado() + valor > oferta.metaMaxima()) return; // not to be confused with the other guard
 
-        _garantirFundos(investidor, address(oferta), valor);
+        _ensureFunds(investidor, address(oferta), valor);
 
         vm.prank(investidor);
         oferta.aportar(valor);
-        ghost_tetoBypassSucceeded = true;
+        ghost_capBypassSucceeded = true;
     }
 
-    // ── Views para o InvariantCaptacaoTest ─────────────────────────────────────────────
+    // ── Views for InvariantCaptacaoTest ────────────────────────────────────────────────
 
     function numCaptacoes() external view returns (uint256) {
-        return captacoesList.length;
+        return fundraisingList.length;
     }
 
     function numActors() external view returns (uint256) {
@@ -370,6 +369,6 @@ contract HandlerCaptacao is Test {
     }
 
     function captacoes(uint256 i) external view returns (address) {
-        return captacoesList[i];
+        return fundraisingList[i];
     }
 }

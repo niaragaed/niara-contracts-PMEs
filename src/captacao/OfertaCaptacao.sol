@@ -12,44 +12,45 @@ import {IEmissaoGateway} from "../interfaces/IEmissaoGateway.sol";
 import {IRegistroInvestidorQualificado} from "../interfaces/IRegistroInvestidorQualificado.sol";
 import {IOfertaCaptacao} from "../interfaces/IOfertaCaptacao.sol";
 
-/// @title OfertaCaptacao
-/// @notice Escrow de uma captação primária (Resolução CVM 88): recebe aportes em `MockBRL`,
-/// encerra em sucesso (`totalArrecadado >= metaMinima`, fechamento parcial permitido) ou
-/// fracasso (abaixo do piso), e só então libera cotas (mint proporcional ao arrecadado) ou
-/// devolve o dinheiro aportado. Nenhum token é cunhado durante a captação — o dinheiro fica
-/// retido neste contrato (escrow) até o desfecho.
-/// @dev PROTÓTIPO EM TESTNET, SEM AUDITORIA EXTERNA. Clonável via EIP-1167, mesma disciplina
-/// da Fase 1 (`ParticipacaoToken`): estado via `initialize()`, implementação-template com
-/// `_disableInitializers()`. `cancelar()` reaproveita o `AGENTE_ROLE`, já timelocked, do
-/// `EmissaoGateway` apontado por `gateway` — este contrato, por ser clonado por oferta, não
-/// possui `AccessControl` próprio (mesmo raciocínio de "autorização por endereço único"
-/// documentado em `ParticipacaoToken`/CLAUDE.md, "Arquitetura da Fase 1").
+/// @title OfertaCaptacao (fundraising offering)
+/// @notice Escrow of a primary fundraising (CVM Resolution 88): receives investments in
+/// `MockBRL`, closes as a success (`totalArrecadado >= metaMinima`, partial close allowed) or a
+/// failure (below the floor), and only then releases shares (minted in proportion to what was
+/// raised) or returns the money invested. No token is minted during the fundraising: the money
+/// stays in this contract (escrow) until the outcome.
+/// @dev TESTNET PROTOTYPE, NO EXTERNAL AUDIT. Clonable via EIP-1167, same discipline as
+/// Phase 1 (`ParticipacaoToken`): state via `initialize()`, template implementation with
+/// `_disableInitializers()`. `cancelar()` reuses the already-timelocked `AGENTE_ROLE` of the
+/// `EmissaoGateway` pointed to by `gateway`: this contract, being cloned per offering, has no
+/// `AccessControl` of its own (same "authorization by a single address" reasoning documented in
+/// `ParticipacaoToken`/CLAUDE.md, "Phase 1 architecture").
 ///
-/// Regra de arredondamento (simplificação deliberada desta fase, ver CLAUDE.md): todo aporte
-/// deve ser múltiplo exato de `precoPorCota`, para que `cotas = aporte / precoPorCota` nunca
-/// deixe poeira. Aceitar valor livre e devolver o resto fica registrado como evolução futura.
+/// Rounding rule (a deliberate simplification in this phase, see CLAUDE.md): every investment
+/// must be an exact multiple of `precoPorCota`, so that `shares = investment / precoPorCota`
+/// never leaves dust. Accepting any amount and returning the remainder is recorded as a future
+/// improvement.
 ///
-/// O `tetoPorInvestidor` é só o limite desta oferta específica. O teto ANUAL CRUZADO ENTRE
-/// PLATAFORMAS previsto na Resolução CVM 88 é OFF-CHAIN e AUTO-DECLARATÓRIO — este contrato
-/// não tem, e não pode ter, visibilidade de aportes do mesmo investidor em outras
-/// plataformas, e não garante esse teto agregado.
+/// `tetoPorInvestidor` is only this specific offering's limit. The ANNUAL CAP ACROSS
+/// PLATFORMS set by CVM Resolution 88 is OFF-CHAIN and SELF-DECLARED: this contract does
+/// not have, and cannot have, visibility into the same investor's investments on other
+/// platforms, and does not guarantee that aggregate cap.
 contract OfertaCaptacao is Initializable, PausableUpgradeable, ReentrancyGuard, IOfertaCaptacao {
     using SafeERC20 for IERC20;
 
-    /// @notice Mesmo papel operacional definido em `EmissaoGateway` — consultado via `gateway`
-    /// para autorizar `cancelar()`, sem que este clone precise de `AccessControl` próprio.
+    /// @notice Same operational role defined in `EmissaoGateway`, read via `gateway` to
+    /// authorize `cancelar()` without this clone needing its own `AccessControl`.
     bytes32 public constant AGENTE_ROLE = keccak256("AGENTE_ROLE");
 
-    /// @notice Teto rígido de taxa nesta fase — ver "Decisões travadas" no CLAUDE.md.
+    /// @notice Hard fee cap in this phase; see "Locked decisions" in CLAUDE.md.
     uint256 public constant TAXA_BPS_MAXIMA = 100;
     uint256 public constant BPS_DENOMINADOR = 10_000;
 
-    /// @notice `ParticipacaoToken` é um ERC-20 padrão de 18 casas (herdado de
-    /// `ERC20Upgradeable`, sem override de `decimals()`) — "1 cota inteira" corresponde a
-    /// `1 ether` (1e18) em unidade bruta do token, mesma convenção já usada na Fase 1
-    /// (`gateway.emitir(token, investidor, 100 ether)` == 100 cotas). `aportado / precoPorCota`
-    /// dá a CONTAGEM adimensional de cotas; multiplicar por `UNIDADE_COTA` reescala essa
-    /// contagem para a unidade bruta que `mint`/`cotasAutorizadas` esperam.
+    /// @notice `ParticipacaoToken` is a standard 18-decimal ERC-20 (inherited from
+    /// `ERC20Upgradeable`, no `decimals()` override): "1 whole share" corresponds to
+    /// `1 ether` (1e18) in the token's raw unit, the same convention already used in Phase 1
+    /// (`gateway.emitir(token, investor, 100 ether)` == 100 shares). `aportado / precoPorCota`
+    /// gives the dimensionless share COUNT; multiplying by `UNIDADE_COTA` rescales that count to
+    /// the raw unit that `mint`/`cotasAutorizadas` expect.
     uint256 public constant UNIDADE_COTA = 1 ether;
 
     enum Estado {
@@ -109,8 +110,8 @@ contract OfertaCaptacao is Initializable, PausableUpgradeable, ReentrancyGuard, 
     error NadaAResgatar();
     error NadaAReembolsar();
 
-    /// @dev Trava a implementação-template — só clones inicializados via `initialize` são
-    /// utilizáveis.
+    /// @dev Locks the template implementation: only clones initialized via `initialize` are
+    /// usable.
     constructor() {
         _disableInitializers();
     }
@@ -120,8 +121,8 @@ contract OfertaCaptacao is Initializable, PausableUpgradeable, ReentrancyGuard, 
         _;
     }
 
-    /// @notice Inicializa o clone (roda uma única vez, no clone). Parâmetros agrupados em
-    /// struct (ver `IOfertaCaptacao.InitParams`) para evitar "stack too deep".
+    /// @notice Initializes the clone (runs once, on the clone). Parameters grouped in a
+    /// struct (see `IOfertaCaptacao.InitParams`) to avoid "stack too deep".
     function initialize(InitParams calldata params) external initializer {
         if (
             params.token == address(0) || params.gateway == address(0) || params.registro == address(0)
@@ -151,9 +152,9 @@ contract OfertaCaptacao is Initializable, PausableUpgradeable, ReentrancyGuard, 
         taxaBps = params.taxaBps;
     }
 
-    /// @notice Aporta `valor` de `moeda` na captação (escrow). Exige múltiplo exato de
-    /// `precoPorCota`, respeita a meta máxima e, para investidores não qualificados, o teto
-    /// por investidor desta oferta.
+    /// @notice Invests `valor` of `moeda` in the fundraising (escrow). Requires an exact multiple of
+    /// `precoPorCota`, respects the maximum target and, for non-qualified investors, this offering's
+    /// per-investor cap.
     function aportar(uint256 valor) external nonReentrant whenNotPaused {
         if (estado != Estado.Aberta) revert OfertaNaoAberta();
         if (block.timestamp >= prazo) revert PrazoExpirado();
@@ -175,8 +176,8 @@ contract OfertaCaptacao is Initializable, PausableUpgradeable, ReentrancyGuard, 
         moeda.safeTransferFrom(msg.sender, address(this), valor);
     }
 
-    /// @notice Encerra a captação (permissionless): válido ao atingir o prazo ou a meta máxima
-    /// antes dele. Sucesso se `totalArrecadado >= metaMinima` (fechamento parcial permitido).
+    /// @notice Closes the fundraising (permissionless): valid once the deadline is reached, or the
+    /// maximum target before it. Success if `totalArrecadado >= metaMinima` (partial close allowed).
     function encerrar() external {
         if (estado != Estado.Aberta) revert OfertaNaoAberta();
         if (block.timestamp < prazo && totalArrecadado != metaMaxima) revert EncerramentoPrematuro();
@@ -185,17 +186,17 @@ contract OfertaCaptacao is Initializable, PausableUpgradeable, ReentrancyGuard, 
         emit OfertaEncerrada(estado, totalArrecadado);
     }
 
-    /// @notice Poder protetivo do AGENTE: cancela a captação ainda aberta, movendo-a para
-    /// fracasso/reembolso. Nunca retém dinheiro — apenas devolve.
+    /// @notice The AGENT's protective power: cancels a still-open fundraising, moving it to
+    /// failure/refund. It never retains money; it only returns it.
     function cancelar() external onlyAgente {
         if (estado != Estado.Aberta) revert OfertaNaoAberta();
         estado = Estado.EncerradaFalha;
         emit OfertaCancelada();
     }
 
-    /// @notice Resgata (pull, uma vez) as cotas proporcionais ao aporte do chamador, só após
-    /// sucesso. O mint é feito via `gateway.emitirParaCaptacao`, que checa que este contrato é
-    /// a captação autorizada daquele token.
+    /// @notice Redeems (pull, once) the shares proportional to the caller's investment, only after
+    /// success. The mint goes through `gateway.emitirParaCaptacao`, which checks that this contract
+    /// is the authorized fundraising for that token.
     function resgatarCotas() external nonReentrant {
         if (estado != Estado.EncerradaSucesso) revert OfertaNaoEncerradaComSucesso();
         if (cotasResgatadas[msg.sender]) revert JaResgatado();
@@ -210,8 +211,8 @@ contract OfertaCaptacao is Initializable, PausableUpgradeable, ReentrancyGuard, 
         IEmissaoGateway(gateway).emitirParaCaptacao(address(token), msg.sender, cotas);
     }
 
-    /// @notice Libera (pull, uma vez, permissionless) o arrecadado ao emissor e a taxa ao
-    /// protocolo, só após sucesso.
+    /// @notice Releases (pull, once, permissionless) the amount raised to the issuer and the fee to
+    /// the protocol, only after success.
     function liberarParaEmissor() external nonReentrant {
         if (estado != Estado.EncerradaSucesso) revert OfertaNaoEncerradaComSucesso();
         if (recursosLiberados) revert RecursosJaLiberados();
@@ -226,7 +227,7 @@ contract OfertaCaptacao is Initializable, PausableUpgradeable, ReentrancyGuard, 
         moeda.safeTransfer(emissorWallet, valorEmissor);
     }
 
-    /// @notice Reembolsa (pull, uma vez) exatamente o aporte do chamador, só após fracasso.
+    /// @notice Refunds (pull, once) exactly the caller's investment, only after failure.
     function reembolsar() external nonReentrant {
         if (estado != Estado.EncerradaFalha) revert OfertaNaoEncerradaComFalha();
         if (reembolsado[msg.sender]) revert JaReembolsado();
@@ -240,8 +241,8 @@ contract OfertaCaptacao is Initializable, PausableUpgradeable, ReentrancyGuard, 
         moeda.safeTransfer(msg.sender, aportado);
     }
 
-    /// @notice Pausa novos aportes em caso de emergência. Não afeta encerramento, resgate,
-    /// reembolso nem liberação — o direito de saque dos investidores nunca fica congelado.
+    /// @notice Pauses new investments in an emergency. It does not affect closing, redemption,
+    /// refund or release: investors' right to withdraw is never frozen.
     function pausar() external onlyAgente {
         _pause();
     }

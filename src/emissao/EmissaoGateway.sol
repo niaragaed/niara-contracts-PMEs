@@ -4,29 +4,28 @@ pragma solidity ^0.8.24;
 import {TimelockedAccessControl} from "../governance/TimelockedAccessControl.sol";
 import {IParticipacaoToken} from "../interfaces/IParticipacaoToken.sol";
 
-/// @title EmissaoGateway
-/// @notice Coordena on-chain a emissão de cotas: atesta o teto autorizado (`atestarCotas`)
-/// antes de liberar a cunhagem (`emitir`) — mesmo padrão atestar→mintar do `BackingGateway` da
-/// exchange (`niara-contracts`, ver Linhagem no CLAUDE.md), adaptado de "lastro custodiado"
-/// para "cotas autorizadas em ato societário".
-/// @dev Detém o papel operacional único desta fase (`AGENTE_ROLE`) sobre qualquer
-/// `ParticipacaoToken` que aponte este contrato como `gateway`. Gestão de papéis passa pelo
-/// timelock herdado de `TimelockedAccessControl`.
+/// @title EmissaoGateway (issuance gateway)
+/// @notice Coordinates share issuance on-chain: attests the authorized cap (`atestarCotas`)
+/// before allowing minting (`emitir`). Same attest→mint pattern as the exchange's
+/// `BackingGateway` (`niara-contracts`, see Lineage in CLAUDE.md), adapted from "custodied
+/// backing" to "shares authorized by a corporate act".
+/// @dev Holds this phase's single operational role (`AGENTE_ROLE`) over any
+/// `ParticipacaoToken` that points at this contract as `gateway`. Role management goes through
+/// the timelock inherited from `TimelockedAccessControl`.
 contract EmissaoGateway is TimelockedAccessControl {
-    /// @notice Papel operacional: agente/plataforma autorizado a atestar, emitir e pausar
-    /// tokens de oferta.
+    /// @notice Operational role: agent/platform authorized to attest, issue and pause offering
+    /// tokens.
     bytes32 public constant AGENTE_ROLE = keccak256("AGENTE_ROLE");
 
-    /// @notice Papel reservado para ações futuras específicas da empresa emissora (ex.:
-    /// propor a própria oferta). Sem uso funcional nesta fase — ver "Pendências conhecidas"
-    /// no CLAUDE.md.
+    /// @notice Role reserved for future actions specific to the issuing company (e.g.
+    /// proposing its own offering). No functional use in this phase; see "Known open items"
+    /// in CLAUDE.md.
     bytes32 public constant EMISSOR_ROLE = keccak256("EMISSOR_ROLE");
 
-    /// @notice Captação (`OfertaCaptacao`) autorizada a mintar cada token via
-    /// `emitirParaCaptacao` — definida pelo AGENTE após a captação ser criada (ver "Cadeia de
-    /// autorização do mint" no CLAUDE.md). Mantém o token com um único caminho de mint mesmo
-    /// quando é um escrow de terceiros, não o AGENTE diretamente, quem aciona a cunhagem no
-    /// sucesso da oferta.
+    /// @notice Fundraising (`OfertaCaptacao`) authorized to mint each token via
+    /// `emitirParaCaptacao`, set by the AGENT after the fundraising is created (see "Mint
+    /// authorization chain" in CLAUDE.md). Keeps the token with a single mint path even when a
+    /// third-party escrow, not the AGENT directly, triggers the mint when the offering succeeds.
     mapping(address => address) public ofertaCaptacaoAutorizada;
 
     event CotasAtestadas(address indexed token, uint256 novoTeto);
@@ -46,19 +45,19 @@ contract EmissaoGateway is TimelockedAccessControl {
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
     }
 
-    /// @notice Eleva o teto de cotas autorizadas de `token` para `novoTeto`.
+    /// @notice Raises the authorized share cap of `token` to `novoTeto`.
     function atestarCotas(address token, uint256 novoTeto) external onlyRole(AGENTE_ROLE) {
         IParticipacaoToken(token).setCotasAutorizadas(novoTeto);
         emit CotasAtestadas(token, novoTeto);
     }
 
-    /// @notice Cunha `amount` de `token` para `to`, dentro do teto já atestado.
+    /// @notice Mints `amount` of `token` to `to`, within the cap already attested.
     function emitir(address token, address to, uint256 amount) external onlyRole(AGENTE_ROLE) {
         IParticipacaoToken(token).mint(to, amount);
         emit CotasEmitidasViaGateway(token, to, amount);
     }
 
-    /// @notice Pausa `token` em caso de emergência.
+    /// @notice Pauses `token` in an emergency.
     function pausarToken(address token) external onlyRole(AGENTE_ROLE) {
         IParticipacaoToken(token).pause();
         emit TokenPausado(token);
@@ -70,33 +69,33 @@ contract EmissaoGateway is TimelockedAccessControl {
         emit TokenDespausado(token);
     }
 
-    /// @notice Define `oferta` como a captação (escrow `OfertaCaptacao`) autorizada a mintar
-    /// `token` via `emitirParaCaptacao`. Chamar após criar a captação — só a partir daí ela
-    /// consegue, no sucesso, mintar as cotas dos investidores (ver sequência operacional no
-    /// CLAUDE.md). Passar `address(0)` revoga a autorização vigente.
+    /// @notice Sets `oferta` as the fundraising (`OfertaCaptacao` escrow) authorized to mint
+    /// `token` via `emitirParaCaptacao`. Call it after creating the fundraising: only from then on
+    /// can it mint the investors' shares on success (see the operational sequence in
+    /// CLAUDE.md). Passing `address(0)` revokes the current authorization.
     function registrarCaptacao(address token, address oferta) external onlyRole(AGENTE_ROLE) {
         ofertaCaptacaoAutorizada[token] = oferta;
         emit CaptacaoRegistrada(token, oferta);
     }
 
-    /// @notice Cunha `cotas` de `token` para `to`, chamável apenas pela `OfertaCaptacao`
-    /// registrada como autorizada daquele token (ver `registrarCaptacao`). O token continua
-    /// checando `totalSupply() + cotas <= cotasAutorizadas` — o invariante da Fase 1 permanece
-    /// load-bearing independentemente de quem tenha acionado o mint.
+    /// @notice Mints `cotas` of `token` to `to`; callable only by the `OfertaCaptacao`
+    /// registered as authorized for that token (see `registrarCaptacao`). The token still
+    /// checks `totalSupply() + cotas <= cotasAutorizadas`: the Phase 1 invariant stays
+    /// load-bearing regardless of who triggered the mint.
     function emitirParaCaptacao(address token, address to, uint256 cotas) external {
         if (msg.sender != ofertaCaptacaoAutorizada[token]) revert NaoAutorizado();
         IParticipacaoToken(token).mint(to, cotas);
         emit CotasEmitidasViaCaptacao(token, to, cotas);
     }
 
-    // ── Troca da política de transferência de um token (sujeita a timelock — decisão sensível,
-    // ver "Arquitetura da Fase 3" no CLAUDE.md) ────────────────────────────────────────────
+    // ── Changing a token's transfer policy (subject to the timelock: a sensitive decision,
+    // see "Phase 3 architecture" in CLAUDE.md) ─────────────────────────────────────────────
     //
-    // `ParticipacaoToken` não existia com um setter de política governado até a Fase 3 — foi
-    // adicionado no próprio token (`setTransferPolicy`, restrito a `onlyGateway`) porque a
-    // troca de política da factory (`transferPolicyPadrao`) só afeta ofertas futuras, e a Fase
-    // 3 precisa poder migrar uma oferta já viva de `DenyAllTransferPolicy` para
-    // `RestrictedTransferPolicy` (ver CLAUDE.md, seção "Pendências conhecidas").
+    // `ParticipacaoToken` had no governed policy setter until Phase 3. It was added to the
+    // token itself (`setTransferPolicy`, restricted to `onlyGateway`) because changing the
+    // factory's policy (`transferPolicyPadrao`) only affects future offerings, and Phase 3
+    // needs to be able to migrate an already-live offering from `DenyAllTransferPolicy` to
+    // `RestrictedTransferPolicy` (see CLAUDE.md, section "Known open items").
 
     function proposeSetTransferPolicy(address token, address novaPolitica)
         external

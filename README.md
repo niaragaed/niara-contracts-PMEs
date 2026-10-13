@@ -1,46 +1,51 @@
 # niara-contracts-PMEs
 
-Contratos Solidity da captação tokenizada de pequenas e médias empresas
-(PMEs) brasileiras, enquadrada na **Resolução CVM 88** — uma empresa cria
-uma oferta, investidores aportam e recebem tokens que representam a cota
-emitida. Repositório irmão de `niara-PMEs` (o site institucional, que lê/
-escreve de verdade contra esta infraestrutura em `/investir/onchain`) e
-separado da exchange `niara-contracts` (mercado secundário do grupo,
-usada aqui só como referência somente-leitura).
+Solidity contracts for the tokenized fundraising of Brazilian small and medium-sized
+enterprises (SMEs, "PMEs" in Portuguese), under **CVM Resolution 88**: a company creates
+an offering, investors invest and receive tokens representing the issued shares. Sister
+repository of `niara-PMEs` (the Niara SMEs web app, which really reads from and writes to
+this infrastructure at `/investir/onchain`) and separate from the `niara-contracts`
+exchange (the group's secondary market, used here only as a read-only reference).
 
-**Protótipo em testnet (Sepolia), sem auditoria externa publicada.**
-Formulação honesta: cobertura total de testes + invariantes por fuzzing,
-**sem** auditoria externa — nenhum contrato deste repositório deve ser
-descrito como "seguro" ou "auditado", e não há deploy em mainnet nesta
-fase. `MockBRL`, a moeda usada nos aportes, é um mock de teste sem lastro.
+**Testnet prototype (Sepolia), with no published external audit.**
+Honest wording: full test coverage + fuzzing invariants, **without** an external
+audit. No contract in this repository should be described as "secure" or "audited", and
+there is no mainnet deployment in this phase. `MockBRL`, the currency used for
+investments, is an unbacked test mock.
 
-## Estágio atual
+## Current stage
 
-Quatro fases de contrato concluídas — **266/266 testes passando**
-(unitários + invariantes por fuzzing stateful), 100% de cobertura
-linha/branch/função nos contratos principais:
+Four contract phases completed, **315/315 tests passing** (unit + stateful fuzzing
+invariants), with 100% line/branch/function coverage on the main contracts:
 
-- **Fase 1** — token de participação clonável (`ParticipacaoToken`, via
-  EIP-1167) com política de transferência plugável, secundário desligado
-  por padrão.
-- **Fase 2** — captação primária com escrow (`OfertaCaptacao`): meta
-  mínima/máxima, teto por investidor, cotas só são mintadas no sucesso da
-  captação.
-- **Fase 3** — política de transferência restrita
-  (`RestrictedTransferPolicy`): lock-up + allowlist + flag de liberação de
-  secundário.
-- **Fase 4** — liquidação secundária (`LiquidacaoSecundaria`): cessão
-  bilateral pareada pela plataforma — não um order book aberto.
+- **Phase 1**: clonable participation token (`ParticipacaoToken`, via EIP-1167) with a
+  pluggable transfer policy, secondary market off by default.
+- **Phase 2**: primary fundraising with escrow (`OfertaCaptacao`): minimum/maximum
+  target, per-investor cap, shares only minted when the fundraising succeeds.
+- **Phase 3**: restricted transfer policy (`RestrictedTransferPolicy`): lock-up +
+  allowlist + a flag that opens the secondary market.
+- **Phase 4**: secondary settlement (`LiquidacaoSecundaria`): a bilateral assignment
+  matched by the platform, not an open order book.
 
-A infraestrutura já está implantada em Sepolia e conectada de verdade ao
-frontend de `niara-PMEs` (`/investir/onchain`), incluindo um conjunto de
-ofertas de demonstração prontas para uso em pitch presencial.
+The infrastructure is deployed on Sepolia and really connected to the `niara-PMEs`
+frontend (`/investir/onchain`), including a set of demo offerings ready for live pitches.
 
-Ver [`CLAUDE.md`](./CLAUDE.md) para o histórico completo de decisões,
-arquitetura de cada fase, endereços implantados e pendências conhecidas —
-é a fonte de verdade deste repositório.
+See [`CLAUDE.md`](./CLAUDE.md) for the full history of decisions, each phase's
+architecture, deployed addresses and known open items. It is this repository's source
+of truth.
 
-## Como rodar
+## Naming
+
+Contract, function, event, error and parameter names are in Portuguese because they are
+the ABI of contracts already deployed on Sepolia. Everything else (comments, NatSpec,
+tests, scripts and docs) is in English. Quick glossary: *oferta* = offering,
+*captação* = fundraising, *cota* = share, *aporte/aportar* = investment/invest,
+*emissor* = issuer, *investidor* = investor, *encerrar* = close, *resgatar* = redeem,
+*reembolsar* = refund, *liberar* = release, *taxa* = fee, *teto* = cap, *prazo* =
+deadline, *meta mínima/máxima* = minimum/maximum target, *cessão* = assignment,
+*vendedor/comprador* = seller/buyer, *liquidação* = settlement.
+
+## How to run
 
 ```bash
 forge build
@@ -50,13 +55,12 @@ forge coverage
 
 ## Foundry
 
-Kit de ferramentas Ethereum usado neste projeto — Forge para build/testes,
-Cast para interagir com contratos e a chain, Anvil para nó local. Docs:
-https://book.getfoundry.sh/
+Ethereum toolkit used in this project: Forge for build/tests, Cast to interact with
+contracts and the chain, Anvil for a local node. Docs: https://book.getfoundry.sh/
 
 ```bash
-forge fmt         # formata o código
+forge fmt         # formats the code
 forge snapshot    # gas snapshots
-anvil             # nó local
-cast <subcommand> # interage com contratos/chain
+anvil             # local node
+cast <subcommand> # interacts with contracts/chain
 ```

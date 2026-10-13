@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {MockBRL} from "../src/mocks/MockBRL.sol";
 
-/// @notice Teste trivial só para validar o harness Foundry (mint/saldo do MockBRL).
+/// @notice Trivial test just to validate the Foundry harness (MockBRL mint/balance).
 contract MockBRLTest is Test {
     MockBRL public brl;
     address public alice = makeAddr("alice");

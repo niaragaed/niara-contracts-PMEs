@@ -11,24 +11,24 @@ import {DenyAllTransferPolicy} from "../src/policies/DenyAllTransferPolicy.sol";
 import {MockBRL} from "../src/mocks/MockBRL.sol";
 import {HandlerCaptacao} from "./invariant/HandlerCaptacao.sol";
 
-/// @notice Testes de invariante com fuzzing stateful do domínio de captação (Fase 2): o
-/// `HandlerCaptacao` executa sequências aleatórias de criarCaptacao/aportar/encerrar/
-/// resgatarCotas/liberarParaEmissor/reembolsar/definirQualificado/cancelar, mais tentativas
-/// deliberadas de burlar guardas, e as funções abaixo verificam que os invariantes de dinheiro
-/// da Fase 2 se mantêm após CADA chamada. Mesma escala de `InvariantTest` (Fase 1):
-/// `runs=256 * depth=100` = 25.600 chamadas por invariante (ver `[invariant]` em foundry.toml).
+/// @notice Stateful fuzzing invariant tests for the fundraising domain (Phase 2): the
+/// `HandlerCaptacao` runs random sequences of criarCaptacao/aportar/encerrar/
+/// resgatarCotas/liberarParaEmissor/reembolsar/definirQualificado/cancelar, plus deliberate
+/// attempts to bypass guards, and the functions below check that Phase 2's money invariants
+/// hold after EVERY call. Same scale as `InvariantTest` (Phase 1):
+/// `runs=256 * depth=100` = 25,600 calls per invariant (see `[invariant]` in foundry.toml).
 contract InvariantCaptacaoTest is Test {
     OfertaCaptacaoFactory public factory;
-    OfertaCaptacao public captacaoImplementacao;
+    OfertaCaptacao public fundraisingImplementation;
     EmissaoGateway public gateway;
     RegistroInvestidorQualificado public registro;
-    ParticipacaoToken public tokenImplementacao;
+    ParticipacaoToken public tokenImplementation;
     DenyAllTransferPolicy public policy;
     MockBRL public moeda;
     HandlerCaptacao public handler;
 
     address public admin = makeAddr("admin");
-    address public agente = makeAddr("agente");
+    address public agent = makeAddr("agente");
     address public emissorWallet = makeAddr("emissorWallet");
     address public protocoloWallet = makeAddr("protocoloWallet");
 
@@ -44,13 +44,13 @@ contract InvariantCaptacaoTest is Test {
         gateway = new EmissaoGateway(admin, TIMELOCK_DELAY);
         registro = new RegistroInvestidorQualificado(admin, TIMELOCK_DELAY);
         moeda = new MockBRL();
-        tokenImplementacao = new ParticipacaoToken();
+        tokenImplementation = new ParticipacaoToken();
         policy = new DenyAllTransferPolicy();
-        captacaoImplementacao = new OfertaCaptacao();
+        fundraisingImplementation = new OfertaCaptacao();
 
         factory = new OfertaCaptacaoFactory(
             admin,
-            address(captacaoImplementacao),
+            address(fundraisingImplementation),
             address(gateway),
             address(registro),
             address(moeda),
@@ -59,9 +59,9 @@ contract InvariantCaptacaoTest is Test {
     }
 
     function _wireRoles() internal {
-        _grantRoleOn(address(gateway), gateway.AGENTE_ROLE(), agente);
-        _grantRoleOn(address(registro), registro.AGENTE_ROLE(), agente);
-        _grantRoleOn(address(factory), factory.AGENTE_ROLE(), agente);
+        _grantRoleOn(address(gateway), gateway.AGENTE_ROLE(), agent);
+        _grantRoleOn(address(registro), registro.AGENTE_ROLE(), agent);
+        _grantRoleOn(address(factory), factory.AGENTE_ROLE(), agent);
     }
 
     function _deployHandler() internal {
@@ -74,14 +74,14 @@ contract InvariantCaptacaoTest is Test {
             HandlerCaptacao.Config({
                 factory: factory,
                 gateway: gateway,
-                registro: registro,
-                moeda: moeda,
-                tokenImplementacao: tokenImplementacao,
+                registry: registro,
+                currency: moeda,
+                tokenImplementation: tokenImplementation,
                 policy: policy,
                 admin: admin,
-                agente: agente,
-                emissorWallet: emissorWallet,
-                protocoloWallet: protocoloWallet,
+                agent: agent,
+                issuerWallet: emissorWallet,
+                protocolWallet: protocoloWallet,
                 actors: actors
             })
         );
@@ -92,21 +92,21 @@ contract InvariantCaptacaoTest is Test {
 
     function _handlerSelectors() internal pure returns (bytes4[] memory selectors) {
         selectors = new bytes4[](15);
-        selectors[0] = HandlerCaptacao.criarCaptacaoEToken.selector;
+        selectors[0] = HandlerCaptacao.createFundraisingAndToken.selector;
         selectors[1] = HandlerCaptacao.aportar.selector;
-        selectors[2] = HandlerCaptacao.avancarTempo.selector;
+        selectors[2] = HandlerCaptacao.advanceTime.selector;
         selectors[3] = HandlerCaptacao.encerrar.selector;
-        selectors[4] = HandlerCaptacao.tentarEncerrarPrematuramente.selector;
+        selectors[4] = HandlerCaptacao.tryClosePrematurely.selector;
         selectors[5] = HandlerCaptacao.definirQualificado.selector;
         selectors[6] = HandlerCaptacao.cancelar.selector;
         selectors[7] = HandlerCaptacao.reembolsar.selector;
-        selectors[8] = HandlerCaptacao.tentarReembolsarDuasVezes.selector;
+        selectors[8] = HandlerCaptacao.tryRefundTwice.selector;
         selectors[9] = HandlerCaptacao.resgatarCotas.selector;
-        selectors[10] = HandlerCaptacao.tentarResgatarDuasVezes.selector;
+        selectors[10] = HandlerCaptacao.tryRedeemTwice.selector;
         selectors[11] = HandlerCaptacao.liberarParaEmissor.selector;
-        selectors[12] = HandlerCaptacao.tentarLiberarDuasVezes.selector;
-        selectors[13] = HandlerCaptacao.tentarAportarForaDoEstado.selector;
-        selectors[14] = HandlerCaptacao.tentarExcederTetoSemQualificacao.selector;
+        selectors[12] = HandlerCaptacao.tryReleaseTwice.selector;
+        selectors[13] = HandlerCaptacao.tryInvestOutOfState.selector;
+        selectors[14] = HandlerCaptacao.tryExceedCapWithoutQualification.selector;
     }
 
     function _grantRoleOn(address target, bytes32 role, address account) internal {
@@ -119,50 +119,50 @@ contract InvariantCaptacaoTest is Test {
         require(ok2, "execute failed");
     }
 
-    // ── Invariante central: contabilidade do escrow ──────────────────────────────────────
+    // ── Core invariant: escrow accounting ────────────────────────────────────────────────
 
     function invariant_EscrowAccountingMatchesCustody() public view {
         uint256 n = handler.numCaptacoes();
         for (uint256 i = 0; i < n; i++) {
             OfertaCaptacao oferta = OfertaCaptacao(handler.captacoes(i));
-            uint256 esperado = oferta.recursosLiberados()
+            uint256 expected = oferta.recursosLiberados()
                 ? 0
-                : oferta.totalArrecadado() - handler.ghost_sumReembolsado(address(oferta));
-            assertEq(moeda.balanceOf(address(oferta)), esperado);
+                : oferta.totalArrecadado() - handler.ghost_sumRefunded(address(oferta));
+            assertEq(moeda.balanceOf(address(oferta)), expected);
         }
     }
 
-    // ── Reembolso nunca excede o arrecadado; nenhum duplo reembolso ─────────────────────
+    // ── Refunds never exceed the amount raised; no double refund ─────────────────────────
 
-    function invariant_ReembolsoNuncaExcedeArrecadado() public view {
+    function invariant_RefundNeverExceedsRaised() public view {
         uint256 n = handler.numCaptacoes();
         for (uint256 i = 0; i < n; i++) {
             OfertaCaptacao oferta = OfertaCaptacao(handler.captacoes(i));
-            assertLe(handler.ghost_sumReembolsado(address(oferta)), oferta.totalArrecadado());
+            assertLe(handler.ghost_sumRefunded(address(oferta)), oferta.totalArrecadado());
         }
     }
 
     function invariant_NoDoubleReembolsoEverSucceeded() public view {
-        assertFalse(handler.ghost_doubleReembolsoSucceeded());
+        assertFalse(handler.ghost_doubleRefundSucceeded());
     }
 
-    // ── Não distribui cota além do subscrito; nenhum duplo resgate ──────────────────────
+    // ── Never distributes shares beyond what was subscribed; no double redemption ────────
 
-    function invariant_CotasMintadasNuncaExcedemSubscrito() public view {
+    function invariant_MintedSharesNeverExceedSubscribed() public view {
         uint256 n = handler.numCaptacoes();
         for (uint256 i = 0; i < n; i++) {
             OfertaCaptacao oferta = OfertaCaptacao(handler.captacoes(i));
-            assertLe(handler.ghost_sumCotasMintadas(address(oferta)), oferta.totalArrecadado() / oferta.precoPorCota());
+            assertLe(handler.ghost_sumSharesMinted(address(oferta)), oferta.totalArrecadado() / oferta.precoPorCota());
         }
     }
 
     function invariant_NoDoubleResgateEverSucceeded() public view {
-        assertFalse(handler.ghost_doubleResgateSucceeded());
+        assertFalse(handler.ghost_doubleRedeemSucceeded());
     }
 
-    // ── Nunca acima da meta máxima ───────────────────────────────────────────────────────
+    // ── Never above the maximum target ───────────────────────────────────────────────────
 
-    function invariant_TotalArrecadadoNeverExceedsMetaMaxima() public view {
+    function invariant_TotalRaisedNeverExceedsMaxTarget() public view {
         uint256 n = handler.numCaptacoes();
         for (uint256 i = 0; i < n; i++) {
             OfertaCaptacao oferta = OfertaCaptacao(handler.captacoes(i));
@@ -170,43 +170,43 @@ contract InvariantCaptacaoTest is Test {
         }
     }
 
-    // ── Teto por investidor respeitado (não-qualificados) ───────────────────────────────
+    // ── Per-investor cap respected (non-qualified investors) ─────────────────────────────
     //
-    // Checado no momento da chamada (ghost), não como snapshot retroativo: qualificação é uma
-    // flag mutável, e um investidor pode legitimamente ficar acima do teto vigente se foi
-    // qualificado no momento do aporte e desqualificado depois — sem confisco retroativo.
+    // Checked at call time (ghost), not as a retroactive snapshot: qualification is a mutable
+    // flag, and an investor can legitimately be above the current cap if they were qualified at
+    // the time of investing and disqualified later, with no retroactive confiscation.
 
-    function invariant_NoTetoBypassEverSucceeded() public view {
-        assertFalse(handler.ghost_tetoBypassSucceeded());
+    function invariant_NoCapBypassEverSucceeded() public view {
+        assertFalse(handler.ghost_capBypassSucceeded());
     }
 
-    // ── Exclusão sucesso/fracasso: nunca os dois para a mesma captação ──────────────────
+    // ── Success/failure exclusion: never both for the same fundraising ───────────────────
 
-    function invariant_NuncaReembolsoEMintJuntos() public view {
+    function invariant_NeverRefundAndMintTogether() public view {
         uint256 n = handler.numCaptacoes();
         for (uint256 i = 0; i < n; i++) {
             address oferta = handler.captacoes(i);
-            bool houveReembolso = handler.ghost_houveReembolso(oferta);
-            bool houveMintOuLiberacao = handler.ghost_houveMintOuLiberacao(oferta);
-            assertFalse(houveReembolso && houveMintOuLiberacao);
+            bool hadRefund = handler.ghost_hadRefund(oferta);
+            bool hadMintOrRelease = handler.ghost_hadMintOrRelease(oferta);
+            assertFalse(hadRefund && hadMintOrRelease);
         }
     }
 
-    // ── Estados monotônicos / guardas de autorização e liberação dupla ──────────────────
+    // ── Monotonic states / authorization and double-release guards ───────────────────────
 
     function invariant_NoUnauthorizedActionEverSucceeded() public view {
         assertFalse(handler.ghost_unauthorizedActionSucceeded());
     }
 
     function invariant_NoDoubleLiberacaoEverSucceeded() public view {
-        assertFalse(handler.ghost_doubleLiberacaoSucceeded());
+        assertFalse(handler.ghost_doubleReleaseSucceeded());
     }
 
     function invariant_NoAportarForaDoEstadoEverSucceeded() public view {
-        assertFalse(handler.ghost_aportarForaDoEstadoSucceeded());
+        assertFalse(handler.ghost_investOutOfStateSucceeded());
     }
 
     function invariant_NoEncerramentoPrematuroEverSucceeded() public view {
-        assertFalse(handler.ghost_encerramentoPrematuroSucceeded());
+        assertFalse(handler.ghost_prematureCloseSucceeded());
     }
 }
