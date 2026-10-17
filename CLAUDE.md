@@ -30,6 +30,24 @@ data (`"Padaria Silva Ltda"`), `cnpj-*` labels (hashed into `cnpjRef`) and `make
 labels (they derive deterministic addresses). New contracts should use English names
 from the start. The README has a short glossary.
 
+## No AI attribution (hard rule)
+
+Nothing in this repository credits an AI tool, anywhere:
+
+- no `Co-Authored-By: Claude` or `Claude-Session:` trailers, and no "Generated with Claude Code"
+  line, in commit messages;
+- no AI tool as a commit author or committer: commits use the project identity
+  (`git config user.name`/`user.email` = `Niara <niaragaed@gmail.com>`, set in every clone and
+  environment before the first commit — some environments default to `Claude <noreply@anthropic.com>`);
+- no "Generated with/by Claude Code" footer in pull request descriptions, comments, issues or files.
+
+It's enforced in two layers: the versioned `.claude/settings.json` turns Claude Code's commit
+and PR attribution off (`"attribution": {"commit": "", "pr": ""}`), and the `No AI attribution`
+GitHub Actions check (`.github/workflows/no-ai-attribution.yml`) fails on any commit or pull
+request description that carries it. Some hosted environments append a footer to PR
+descriptions by themselves; if the check flags one, delete that line in the GitHub UI. The rule
+applies to every Niara repository, including new ones: copy both files when creating a repo.
+
 ---
 
 ## Product vision
@@ -977,21 +995,9 @@ operation (primary + secondary): `EmissaoGateway`, `ParticipacaoTokenFactory`,
   published history.
 - Repo identity: `niara <niaragaed@gmail.com>` (configured locally via
   `git config user.name`/`user.email`, without `--global`). It sets each commit's
-  author/committer and has **no relation** to the trailer below (they are two independent
-  mechanisms).
-- 🔴 No `Co-Authored-By: Claude` trailer and no "Generated with Claude Code": a project
-  rule, but **not automatic**. It depends on `.claude/settings.json` existing at the repo
-  root with exactly:
-  ```json
-  {
-    "includeCoAuthoredBy": false
-  }
-  ```
-  That file is in `.gitignore` (`/.claude/`) and is never versioned, so it **must be
-  created by hand on each new machine/clone**, before the first commit. Without it, Claude
-  Code adds the trailer by default, even with the identity above correctly configured;
-  that is exactly what happened in the sister repository (`niara-PMEs`) before this file
-  existed there.
+  author/committer.
+- 🔴 No AI attribution in commits, PRs or files: see "No AI attribution (hard rule)" at
+  the top of this file.
 - Public repository: no versioned secrets. `.gitignore` covers `out/`, `cache/`,
   `broadcast/` (except dry-run/local), `.env`.
 - No Sepolia deploy (`--broadcast`) without an explicit instruction. Deploy scripts may be

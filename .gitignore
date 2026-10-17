@@ -33,4 +33,5 @@ script/output/
 
 # Local Claude Code config (e.g. includeCoAuthoredBy): per machine, never
 # versioned; see CLAUDE.md, "Git / GitHub", for the exact content to recreate.
-/.claude/
+/.claude/*
+!/.claude/settings.json
