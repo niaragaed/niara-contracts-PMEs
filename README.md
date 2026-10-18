@@ -16,7 +16,7 @@ investments, is an unbacked test mock.
 ## Current stage
 
 Four contract phases completed, **315/315 tests passing** (unit + stateful fuzzing
-invariants), with 100% line/branch/function coverage on the main contracts:
+invariants; forge 1.8+ reports them as 284 results, one per invariant suite), with 100% line/branch/function coverage on the main contracts:
 
 - **Phase 1**: clonable participation token (`ParticipacaoToken`, via EIP-1167) with a
   pluggable transfer policy, secondary market off by default.

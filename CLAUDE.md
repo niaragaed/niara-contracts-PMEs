@@ -903,7 +903,10 @@ operation (primary + secondary): `EmissaoGateway`, `ParticipacaoTokenFactory`,
   called without `propose`) and **+3 tests** against the `settle` source excerpt (the
   anti-evasion guard: reverts when the fee truncates to zero, passes when the amount is
   sufficient, and confirms the guard does not fire with the fee dormant). The current total,
-  including the `OfertaOrquestrador` suites, is **315/315**.
+  including the `OfertaOrquestrador` suites, is **315/315** test functions. Since forge
+  1.8, each invariant suite runs all its `invariant_*` functions in one shared campaign and is
+  reported as a single result, so `forge test` prints **284 passed** for the same 315 functions
+  (checked: breaking any one invariant still fails its suite).
 - `forge coverage` on Phase 4's main contracts (`LiquidacaoSecundaria`, and the small
   extensions of `IParticipacaoToken`/the new `IParticipacaoTokenFactory`): **100%
   line/statement/branch/function**, the same bar as the earlier phases. The guards added in
@@ -1018,6 +1021,10 @@ operation (primary + secondary): `EmissaoGateway`, `ParticipacaoTokenFactory`,
 - `lib/openzeppelin-contracts` and `lib/openzeppelin-contracts-upgradeable`, installed via
   `forge install` (git submodules), both at tag `v5.6.1`.
 - Remappings and fuzz/invariant profiles in `foundry.toml`.
+- **Foundry pinned to `v1.8.5`** in CI (`.github/workflows/test.yml`). `forge fmt --check`
+  is part of CI and its rules change between releases, so an unpinned toolchain can turn CI red
+  without any code change (CI was red from 2026-10-02 until the `forge fmt` pass with v1.8.5).
+  Format with the same version locally, and bump the pin together with a `forge fmt` pass.
 
 ## How to run
 

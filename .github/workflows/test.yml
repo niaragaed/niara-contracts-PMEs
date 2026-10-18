@@ -21,6 +21,9 @@ jobs:
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
+        with:
+          # Pinned: forge fmt rules change between releases (see CLAUDE.md, "Stack").
+          version: v1.8.5
 
       - name: Show Forge version
         run: forge --version
