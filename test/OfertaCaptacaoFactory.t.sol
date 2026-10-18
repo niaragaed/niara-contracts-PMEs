@@ -95,7 +95,9 @@ contract OfertaCaptacaoFactoryTest is Test {
 
     function test_Constructor_RevertsForZeroImplementacao() public {
         vm.expectRevert(OfertaCaptacaoFactory.ZeroAddress.selector);
-        new OfertaCaptacaoFactory(admin, address(0), address(gateway), address(registro), address(moeda), TIMELOCK_DELAY);
+        new OfertaCaptacaoFactory(
+            admin, address(0), address(gateway), address(registro), address(moeda), TIMELOCK_DELAY
+        );
     }
 
     function test_Constructor_RevertsForZeroGateway() public {

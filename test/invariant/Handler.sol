@@ -111,7 +111,8 @@ contract Handler is Test {
         uint256 atual = token.cotasAutorizadas();
 
         bool chaos = _chaos(chaosSeed);
-        uint256 novoTeto = chaos ? newCapSeed % (atual == 0 ? 1 : atual) : bound(newCapSeed, atual, atual + 1_000_000 ether);
+        uint256 novoTeto =
+            chaos ? newCapSeed % (atual == 0 ? 1 : atual) : bound(newCapSeed, atual, atual + 1_000_000 ether);
         address caller = chaos && chaosSeed % 2 == 0 ? _actorAt(chaosSeed) : agent;
 
         vm.prank(caller);

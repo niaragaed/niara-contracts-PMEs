@@ -103,9 +103,8 @@ contract HandlerSecundario is Test {
 
     function createToken(uint256 seed) external {
         vm.prank(agent);
-        address token = factory.criarOferta(
-            "Oferta Secundario", "nSEC", "Empresa Secundario", bytes32(0), vm.toString(seed)
-        );
+        address token =
+            factory.criarOferta("Oferta Secundario", "nSEC", "Empresa Secundario", bytes32(0), vm.toString(seed));
 
         vm.prank(agent);
         gateway.atestarCotas(token, 1_000_000 ether);

@@ -115,8 +115,7 @@ contract LiquidacaoSecundaria is TimelockedAccessControl, ReentrancyGuard, Pausa
     constructor(address admin_, address moeda_, address factory_, address protocoloWallet_, uint256 timelockDelay_)
         TimelockedAccessControl(timelockDelay_)
     {
-        if (admin_ == address(0) || moeda_ == address(0) || factory_ == address(0) || protocoloWallet_ == address(0))
-        {
+        if (admin_ == address(0) || moeda_ == address(0) || factory_ == address(0) || protocoloWallet_ == address(0)) {
             revert ZeroAddress();
         }
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
@@ -132,14 +131,16 @@ contract LiquidacaoSecundaria is TimelockedAccessControl, ReentrancyGuard, Pausa
     /// contract never holds either asset; it only moves what was pre-approved, in a single atomic
     /// transaction (any revert undoes everything, including the `MockBRL` legs already executed
     /// before the token's `transferFrom`).
-    function liquidarCessao(address token, address vendedor, address comprador, uint256 quantidade, uint256 precoPorCota)
-        external
-        onlyRole(AGENTE_ROLE)
-        nonReentrant
-        whenNotPaused
-        returns (uint256 taxa)
-    {
-        if (token == address(0) || vendedor == address(0) || comprador == address(0)) revert ZeroAddress();
+    function liquidarCessao(
+        address token,
+        address vendedor,
+        address comprador,
+        uint256 quantidade,
+        uint256 precoPorCota
+    ) external onlyRole(AGENTE_ROLE) nonReentrant whenNotPaused returns (uint256 taxa) {
+        if (token == address(0) || vendedor == address(0) || comprador == address(0)) {
+            revert ZeroAddress();
+        }
         if (vendedor == comprador) revert VendedorIgualComprador();
         if (!factory.isOferta(token)) revert TokenDesconhecido(token);
         if (quantidade == 0) revert QuantidadeInvalida();

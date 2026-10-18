@@ -83,7 +83,8 @@ contract DemoNiaraPMEsOnChain is Script {
         bytes32 role = keccak256("AGENTE_ROLE");
         address[3] memory targets = [ISSUANCE_GATEWAY, TOKEN_FACTORY, FUNDRAISING_FACTORY];
         for (uint256 i = 0; i < targets.length; i++) {
-            (bool alreadyHas, bytes memory result) = targets[i].staticcall(abi.encodeWithSignature("hasRole(bytes32,address)", role, deployer));
+            (bool alreadyHas, bytes memory result) =
+                targets[i].staticcall(abi.encodeWithSignature("hasRole(bytes32,address)", role, deployer));
             if (alreadyHas && abi.decode(result, (bool))) continue;
 
             (bool ok,) = targets[i].call(abi.encodeWithSignature("executeGrantRole(bytes32,address)", role, deployer));

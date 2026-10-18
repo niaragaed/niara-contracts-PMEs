@@ -91,9 +91,7 @@ contract OfertaCaptacaoReentrancyTest is Test {
     // ── aportar: reentrada via transferFrom (entrada de fundos) ──────────────────────────
 
     function test_Aportar_BlockedByReentrancyGuard() public {
-        moeda.armAttack(
-            address(oferta), abi.encodeWithSelector(OfertaCaptacao.aportar.selector, PRICE_PER_SHARE)
-        );
+        moeda.armAttack(address(oferta), abi.encodeWithSelector(OfertaCaptacao.aportar.selector, PRICE_PER_SHARE));
 
         vm.prank(investor1);
         oferta.aportar(1_000 ether);

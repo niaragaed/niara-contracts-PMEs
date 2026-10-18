@@ -94,9 +94,16 @@ contract HandlerPolitica is Test {
 
     function createToken(uint256 seed) external {
         address clone = Clones.clone(address(tokenImplementation));
-        ParticipacaoToken(clone).initialize(
-            "Oferta Politica", "nPOL", address(gateway), address(policy), "Empresa Politica", bytes32(0), vm.toString(seed)
-        );
+        ParticipacaoToken(clone)
+            .initialize(
+                "Oferta Politica",
+                "nPOL",
+                address(gateway),
+                address(policy),
+                "Empresa Politica",
+                bytes32(0),
+                vm.toString(seed)
+            );
 
         vm.prank(agent);
         gateway.atestarCotas(clone, 1_000_000 ether);

@@ -254,7 +254,9 @@ contract EmissaoGatewayTest is Test {
         DenyAllTransferPolicy novaPolitica = new DenyAllTransferPolicy();
         vm.prank(stranger);
         vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, DEFAULT_ADMIN_ROLE)
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, DEFAULT_ADMIN_ROLE
+            )
         );
         gateway.proposeSetTransferPolicy(address(token), address(novaPolitica));
     }

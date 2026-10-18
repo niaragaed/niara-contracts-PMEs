@@ -34,7 +34,9 @@ contract IssuerRelay {
         uint256 precoPorCota,
         uint256 prazo
     ) external returns (address token, address oferta) {
-        return orq.criarOfertaCompleta(nome, simbolo, empresa, cnpjRef, serie, metaMinima, metaMaxima, precoPorCota, prazo);
+        return orq.criarOfertaCompleta(
+            nome, simbolo, empresa, cnpjRef, serie, metaMinima, metaMaxima, precoPorCota, prazo
+        );
     }
 }
 
@@ -133,7 +135,15 @@ contract OfertaOrquestradorTest is Test {
     function _createDefaultOffering(address emissor) internal returns (address token, address oferta) {
         vm.prank(emissor);
         return orq.criarOfertaCompleta(
-            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, DEFAULT_MIN_TARGET, DEFAULT_MAX_TARGET, DEFAULT_PRICE_PER_SHARE, _validDeadline()
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            DEFAULT_PRICE_PER_SHARE,
+            _validDeadline()
         );
     }
 
@@ -257,7 +267,15 @@ contract OfertaOrquestradorTest is Test {
         vm.prank(issuer2);
         vm.expectRevert(abi.encodeWithSelector(OfertaOrquestrador.EmissorNaoAutorizado.selector, issuer2));
         orq.criarOfertaCompleta(
-            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, DEFAULT_MIN_TARGET, DEFAULT_MAX_TARGET, DEFAULT_PRICE_PER_SHARE, _validDeadline()
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            DEFAULT_PRICE_PER_SHARE,
+            _validDeadline()
         );
     }
 
@@ -270,7 +288,15 @@ contract OfertaOrquestradorTest is Test {
         vm.prank(issuer1);
         vm.expectRevert(abi.encodeWithSelector(OfertaOrquestrador.EmissorNaoAutorizado.selector, issuer1));
         orq.criarOfertaCompleta(
-            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, DEFAULT_MIN_TARGET, DEFAULT_MAX_TARGET, DEFAULT_PRICE_PER_SHARE, _validDeadline()
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            DEFAULT_PRICE_PER_SHARE,
+            _validDeadline()
         );
     }
 
@@ -280,7 +306,15 @@ contract OfertaOrquestradorTest is Test {
         uint256 prazo = block.timestamp + 180 days;
         vm.prank(issuer1);
         (address token, address oferta) = orq.criarOfertaCompleta(
-            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, DEFAULT_MIN_TARGET, DEFAULT_MAX_TARGET, DEFAULT_PRICE_PER_SHARE, prazo
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            DEFAULT_PRICE_PER_SHARE,
+            prazo
         );
         assertTrue(tokenFactory.isOferta(token));
         assertTrue(captacaoFactory.isCaptacao(oferta));
@@ -291,7 +325,15 @@ contract OfertaOrquestradorTest is Test {
         vm.prank(issuer1);
         vm.expectRevert(abi.encodeWithSelector(OfertaOrquestrador.PrazoExcedeLimite.selector, prazo, 180 days));
         orq.criarOfertaCompleta(
-            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, DEFAULT_MIN_TARGET, DEFAULT_MAX_TARGET, DEFAULT_PRICE_PER_SHARE, prazo
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            DEFAULT_PRICE_PER_SHARE,
+            prazo
         );
     }
 
@@ -317,8 +359,9 @@ contract OfertaOrquestradorTest is Test {
         uint256 precoPorCota = 1_000_000 ether; // 15_000_000 % 1_000_000 == 0
 
         vm.prank(issuer1);
-        (address token,) =
-            orq.criarOfertaCompleta(NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, metaMinima, metaMaxima, precoPorCota, _validDeadline());
+        (address token,) = orq.criarOfertaCompleta(
+            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, metaMinima, metaMaxima, precoPorCota, _validDeadline()
+        );
         assertEq(ParticipacaoToken(token).cotasAutorizadas(), 15 ether);
     }
 
@@ -373,7 +416,15 @@ contract OfertaOrquestradorTest is Test {
             )
         );
         orq.criarOfertaCompleta(
-            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, DEFAULT_MIN_TARGET, DEFAULT_MAX_TARGET, precoPorCota, _validDeadline()
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            precoPorCota,
+            _validDeadline()
         );
     }
 
@@ -397,7 +448,15 @@ contract OfertaOrquestradorTest is Test {
         orq.autorizarEmissor(address(relay));
 
         (, address oferta) = relay.create(
-            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, DEFAULT_MIN_TARGET, DEFAULT_MAX_TARGET, DEFAULT_PRICE_PER_SHARE, _validDeadline()
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            DEFAULT_PRICE_PER_SHARE,
+            _validDeadline()
         );
 
         // `criarOfertaCompleta` has no parameter to "pass through" another issuer: even an
@@ -449,7 +508,15 @@ contract OfertaOrquestradorTest is Test {
         vm.prank(issuer1);
         vm.expectRevert(abi.encodeWithSelector(OfertaOrquestrador.OfertaAnteriorAindaAberta.selector, ofertaAnterior));
         orq.criarOfertaCompleta(
-            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, DEFAULT_MIN_TARGET, DEFAULT_MAX_TARGET, DEFAULT_PRICE_PER_SHARE, _validDeadline()
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            DEFAULT_PRICE_PER_SHARE,
+            _validDeadline()
         );
     }
 
@@ -472,8 +539,9 @@ contract OfertaOrquestradorTest is Test {
         uint256 precoPorCota = 100 ether;
 
         vm.prank(issuer1);
-        (, address ofertaAnterior) =
-            orq.criarOfertaCompleta(NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, target, target, precoPorCota, _validDeadline());
+        (, address ofertaAnterior) = orq.criarOfertaCompleta(
+            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, target, target, precoPorCota, _validDeadline()
+        );
 
         moeda.mint(investor1, target);
         vm.prank(investor1);
@@ -511,7 +579,15 @@ contract OfertaOrquestradorTest is Test {
         vm.prank(issuer1);
         vm.expectRevert();
         orchestratorWithoutRole.criarOfertaCompleta(
-            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, DEFAULT_MIN_TARGET, DEFAULT_MAX_TARGET, DEFAULT_PRICE_PER_SHARE, _validDeadline()
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            DEFAULT_PRICE_PER_SHARE,
+            _validDeadline()
         );
 
         assertEq(tokenFactory.numOfertas(), offeringCountBefore);
@@ -554,7 +630,15 @@ contract OfertaOrquestradorTest is Test {
         vm.prank(issuer1);
         vm.expectRevert(MockEmissaoGatewayRevertaEmRegistrar.ForcedTestFailure.selector);
         atomicOrchestrator.criarOfertaCompleta(
-            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, DEFAULT_MIN_TARGET, DEFAULT_MAX_TARGET, DEFAULT_PRICE_PER_SHARE, _validDeadline()
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            DEFAULT_PRICE_PER_SHARE,
+            _validDeadline()
         );
 
         // Neither the token nor the fundraising (created in subcalls 1 and 3, BEFORE the failure in
@@ -586,7 +670,15 @@ contract OfertaOrquestradorTest is Test {
         vm.prank(issuer1);
         vm.expectRevert();
         orq.criarOfertaCompleta(
-            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, DEFAULT_MIN_TARGET, DEFAULT_MAX_TARGET, DEFAULT_PRICE_PER_SHARE, _validDeadline()
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            DEFAULT_PRICE_PER_SHARE,
+            _validDeadline()
         );
     }
 
@@ -595,8 +687,9 @@ contract OfertaOrquestradorTest is Test {
         uint256 precoPorCota = 100 ether;
 
         vm.prank(issuer1);
-        (address token, address oferta) =
-            orq.criarOfertaCompleta(NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, target, target, precoPorCota, _validDeadline());
+        (address token, address oferta) = orq.criarOfertaCompleta(
+            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, target, target, precoPorCota, _validDeadline()
+        );
 
         moeda.mint(investor1, target);
         vm.prank(investor1);
@@ -640,8 +733,9 @@ contract OfertaOrquestradorTest is Test {
         uint256 precoPorCota = 100 ether;
 
         vm.prank(issuer1);
-        (address token, address oferta) =
-            orq.criarOfertaCompleta(NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, target, target, precoPorCota, _validDeadline());
+        (address token, address oferta) = orq.criarOfertaCompleta(
+            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, target, target, precoPorCota, _validDeadline()
+        );
 
         moeda.mint(investor1, target);
         vm.prank(investor1);

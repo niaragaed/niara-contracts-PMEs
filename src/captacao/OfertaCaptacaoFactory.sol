@@ -99,22 +99,23 @@ contract OfertaCaptacaoFactory is TimelockedAccessControl, Pausable {
         if (taxaBps > TAXA_BPS_MAXIMA) revert TaxaExcedeMaximo(taxaBps, TAXA_BPS_MAXIMA);
 
         oferta = Clones.clone(implementacao);
-        IOfertaCaptacao(oferta).initialize(
-            IOfertaCaptacao.InitParams({
-                token: token,
-                gateway: gateway,
-                registro: registro,
-                moeda: moeda,
-                emissorWallet: emissorWallet,
-                protocoloWallet: protocoloWallet,
-                metaMinima: metaMinima,
-                metaMaxima: metaMaxima,
-                precoPorCota: precoPorCota,
-                prazo: prazo,
-                tetoPorInvestidor: tetoPorInvestidor,
-                taxaBps: taxaBps
-            })
-        );
+        IOfertaCaptacao(oferta)
+            .initialize(
+                IOfertaCaptacao.InitParams({
+                    token: token,
+                    gateway: gateway,
+                    registro: registro,
+                    moeda: moeda,
+                    emissorWallet: emissorWallet,
+                    protocoloWallet: protocoloWallet,
+                    metaMinima: metaMinima,
+                    metaMaxima: metaMaxima,
+                    precoPorCota: precoPorCota,
+                    prazo: prazo,
+                    tetoPorInvestidor: tetoPorInvestidor,
+                    taxaBps: taxaBps
+                })
+            );
 
         captacoes.push(oferta);
         isCaptacao[oferta] = true;

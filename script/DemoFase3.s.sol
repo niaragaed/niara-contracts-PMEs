@@ -113,7 +113,11 @@ contract DemoFase3 is Script {
         infra.tokenImplementation = new ParticipacaoToken();
         infra.gateway = new EmissaoGateway(cfg.admin, TIMELOCK_DELAY);
         infra.factory = new ParticipacaoTokenFactory(
-            cfg.admin, address(infra.tokenImplementation), address(infra.gateway), address(infra.denyAll), TIMELOCK_DELAY
+            cfg.admin,
+            address(infra.tokenImplementation),
+            address(infra.gateway),
+            address(infra.denyAll),
+            TIMELOCK_DELAY
         );
     }
 
@@ -139,9 +143,10 @@ contract DemoFase3 is Script {
     // ── Step 0: issuance mini-cycle (mint via gateway, passes under any policy) ─────────────
 
     function _createOfferingAndIssue(Infra memory infra, Config memory cfg) internal {
-        infra.token = infra.factory.criarOferta(
-            "Oferta Demo Fase 3", "nDEMO3", "Empresa Demo Fase 3 Ltda", keccak256("cnpj-demo-fase3"), "2026-A"
-        );
+        infra.token = infra.factory
+            .criarOferta(
+                "Oferta Demo Fase 3", "nDEMO3", "Empresa Demo Fase 3 Ltda", keccak256("cnpj-demo-fase3"), "2026-A"
+            );
 
         infra.gateway.atestarCotas(infra.token, DEMO_AUTHORIZED_SHARES);
         infra.gateway.emitir(infra.token, cfg.investor1, DEMO_INVESTOR1_SHARES);
@@ -175,9 +180,7 @@ contract DemoFase3 is Script {
 
     // ── Demo transfers ──────────────────────────────────────────────────────────────────
 
-    function _tryTransfer(Infra memory infra, uint256 fromPrivateKey, address to, string memory label)
-        internal
-    {
+    function _tryTransfer(Infra memory infra, uint256 fromPrivateKey, address to, string memory label) internal {
         vm.startBroadcast(fromPrivateKey);
         try ParticipacaoToken(infra.token).transfer(to, DEMO_TRANSFER_AMOUNT) {
             console2.log(string.concat("[INESPERADO] transferencia passou: ", label));

@@ -36,8 +36,9 @@ contract InvariantTest is Test {
         gateway = new EmissaoGateway(admin, TIMELOCK_DELAY);
         implementacao = new ParticipacaoToken();
         policy = new DenyAllTransferPolicy();
-        factory =
-            new ParticipacaoTokenFactory(admin, address(implementacao), address(gateway), address(policy), TIMELOCK_DELAY);
+        factory = new ParticipacaoTokenFactory(
+            admin, address(implementacao), address(gateway), address(policy), TIMELOCK_DELAY
+        );
     }
 
     function _wireRoles() internal {

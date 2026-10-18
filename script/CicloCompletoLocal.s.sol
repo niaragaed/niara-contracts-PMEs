@@ -90,17 +90,18 @@ contract CicloCompletoLocal is Script {
         vm.stopBroadcast();
 
         vm.startBroadcast(ISSUER);
-        (address token, address oferta) = infra.orchestrator.criarOfertaCompleta(
-            "Oferta Ensaio Local",
-            "nENS",
-            "Empresa Ensaio Local Ltda",
-            keccak256(abi.encode("cnpj-ensaio-local", block.timestamp)),
-            "2026-ENSAIO-LOCAL",
-            MIN_TARGET,
-            MAX_TARGET,
-            PRICE_PER_SHARE,
-            block.timestamp + DEADLINE_SECONDS
-        );
+        (address token, address oferta) = infra.orchestrator
+            .criarOfertaCompleta(
+                "Oferta Ensaio Local",
+                "nENS",
+                "Empresa Ensaio Local Ltda",
+                keccak256(abi.encode("cnpj-ensaio-local", block.timestamp)),
+                "2026-ENSAIO-LOCAL",
+                MIN_TARGET,
+                MAX_TARGET,
+                PRICE_PER_SHARE,
+                block.timestamp + DEADLINE_SECONDS
+            );
         vm.stopBroadcast();
 
         vm.startBroadcast(INVESTOR1);
@@ -182,7 +183,9 @@ contract CicloCompletoLocal is Script {
         console2.log("== CicloCompletoLocal: ciclo completo via OfertaOrquestrador ==");
         console2.log("Token (ParticipacaoToken):", token);
         console2.log("Offering (OfertaCaptacao escrow):", oferta);
-        console2.log("Final state (1 = EncerradaSucesso, closed with success):", uint256(OfertaCaptacao(oferta).estado()));
+        console2.log(
+            "Final state (1 = EncerradaSucesso, closed with success):", uint256(OfertaCaptacao(oferta).estado())
+        );
         console2.log("Total raised:", OfertaCaptacao(oferta).totalArrecadado());
         console2.log("");
         console2.log("Investor 1 shares:", ParticipacaoToken(token).balanceOf(INVESTOR1));

@@ -89,7 +89,12 @@ contract LiquidacaoSecundariaReentrancyTest is Test {
         moeda.armAttack(
             address(settlement),
             abi.encodeWithSelector(
-                LiquidacaoSecundaria.liquidarCessao.selector, address(token), vendedor, comprador, 10 ether, PRICE_PER_SHARE
+                LiquidacaoSecundaria.liquidarCessao.selector,
+                address(token),
+                vendedor,
+                comprador,
+                10 ether,
+                PRICE_PER_SHARE
             )
         );
 

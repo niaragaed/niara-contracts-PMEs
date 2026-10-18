@@ -155,7 +155,10 @@ contract InvariantOrquestradorTest is Test {
 
             assertLe(oferta.metaMaxima(), orq.TETO_OFERTA());
             assertLe(oferta.prazo() - createdAt, orq.PRAZO_MAXIMO());
-            assertLe(oferta.metaMaxima() * orq.LOTE_ADICIONAL_DENOMINADOR(), oferta.metaMinima() * orq.LOTE_ADICIONAL_NUMERADOR());
+            assertLe(
+                oferta.metaMaxima() * orq.LOTE_ADICIONAL_DENOMINADOR(),
+                oferta.metaMinima() * orq.LOTE_ADICIONAL_NUMERADOR()
+            );
         }
     }
 

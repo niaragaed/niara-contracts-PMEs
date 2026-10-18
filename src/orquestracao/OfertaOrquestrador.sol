@@ -281,9 +281,18 @@ contract OfertaOrquestrador is TimelockedAccessControl, Pausable {
         uint256 cotasAutorizadas = (metaMaxima / precoPorCota) * UNIDADE_COTA;
         IEmissaoGatewayDoOrquestrador(emissaoGateway).atestarCotas(token, cotasAutorizadas);
 
-        oferta = ICaptacaoFactoryDoOrquestrador(captacaoFactory).criarCaptacao(
-            token, metaMinima, metaMaxima, precoPorCota, prazo, tetoPorInvestidor, taxaBps, msg.sender, protocoloWallet
-        );
+        oferta = ICaptacaoFactoryDoOrquestrador(captacaoFactory)
+            .criarCaptacao(
+                token,
+                metaMinima,
+                metaMaxima,
+                precoPorCota,
+                prazo,
+                tetoPorInvestidor,
+                taxaBps,
+                msg.sender,
+                protocoloWallet
+            );
 
         IEmissaoGatewayDoOrquestrador(emissaoGateway).registrarCaptacao(token, oferta);
 
@@ -319,8 +328,14 @@ contract OfertaOrquestrador is TimelockedAccessControl, Pausable {
         emit ProtocoloWalletChanged(antigo, novo);
     }
 
-    function proposeSetTaxaBps(uint256 novaTaxaBps) external onlyRole(DEFAULT_ADMIN_ROLE) returns (uint256 executeAfter) {
-        if (novaTaxaBps > TAXA_BPS_MAXIMA) revert TaxaExcedeMaximo(novaTaxaBps, TAXA_BPS_MAXIMA);
+    function proposeSetTaxaBps(uint256 novaTaxaBps)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+        returns (uint256 executeAfter)
+    {
+        if (novaTaxaBps > TAXA_BPS_MAXIMA) {
+            revert TaxaExcedeMaximo(novaTaxaBps, TAXA_BPS_MAXIMA);
+        }
         bytes32 actionId = keccak256(abi.encode("SET_TAXA_BPS", novaTaxaBps));
         executeAfter = _scheduleAction(actionId);
         emit TaxaBpsChangeProposed(novaTaxaBps, executeAfter);

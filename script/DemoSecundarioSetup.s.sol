@@ -91,8 +91,9 @@ contract DemoSecundarioSetup is Script {
             address(infra.currency),
             TIMELOCK_DELAY
         );
-        infra.settlement =
-            new LiquidacaoSecundaria(admin, address(infra.currency), address(infra.tokenFactory), protocoloWallet, TIMELOCK_DELAY);
+        infra.settlement = new LiquidacaoSecundaria(
+            admin, address(infra.currency), address(infra.tokenFactory), protocoloWallet, TIMELOCK_DELAY
+        );
     }
 
     /// @dev Proposes (does not execute) AGENTE_ROLE for `agent` on the six contracts that require it.

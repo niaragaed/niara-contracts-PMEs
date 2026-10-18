@@ -195,10 +195,13 @@ contract HandlerOrquestrador is Test {
 
     /// @dev Receives `p` by reference (`memory` struct) and mutates it in place; the caller
     /// sees the result without needing a return value.
-    function _applyChaos(OfferingParams memory p, uint256 chaosSeed, uint256 maxTargetSeed, uint256 deadlineSeed, uint256 teto)
-        internal
-        view
-    {
+    function _applyChaos(
+        OfferingParams memory p,
+        uint256 chaosSeed,
+        uint256 maxTargetSeed,
+        uint256 deadlineSeed,
+        uint256 teto
+    ) internal view {
         uint256 mode = chaosSeed % 4;
         if (mode == 0) {
             p.prazo = block.timestamp + orq.PRAZO_MAXIMO() + 1 + (deadlineSeed % 365 days);
@@ -216,7 +219,15 @@ contract HandlerOrquestrador is Test {
 
         vm.prank(emissor);
         (address token, address oferta) = orq.criarOfertaCompleta(
-            "Oferta Fuzz", "nFZ", "Empresa Fuzz", cnpjRef, "2026-FZ", p.metaMinima, p.metaMaxima, p.precoPorCota, p.prazo
+            "Oferta Fuzz",
+            "nFZ",
+            "Empresa Fuzz",
+            cnpjRef,
+            "2026-FZ",
+            p.metaMinima,
+            p.metaMaxima,
+            p.precoPorCota,
+            p.prazo
         );
 
         // Only reaches here if it did NOT revert.

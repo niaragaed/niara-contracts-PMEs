@@ -217,7 +217,9 @@ contract RestrictedTransferPolicyTest is Test {
     function test_SetSecundarioLiberado_OnlyAdminCanPropose() public {
         vm.prank(stranger);
         vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, DEFAULT_ADMIN_ROLE)
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, DEFAULT_ADMIN_ROLE
+            )
         );
         policy.proposeSetSecundarioLiberado(tokenA, true);
     }

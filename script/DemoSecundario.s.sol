@@ -68,8 +68,8 @@ contract DemoSecundario is Script {
         vm.stopBroadcast();
 
         vm.startBroadcast(cfg.deployerPk);
-        uint256 feeCharged =
-            infra.settlement.liquidarCessao(address(infra.token), cfg.seller, cfg.buyer, ASSIGNMENT_QUANTITY, PRICE_PER_SHARE);
+        uint256 feeCharged = infra.settlement
+            .liquidarCessao(address(infra.token), cfg.seller, cfg.buyer, ASSIGNMENT_QUANTITY, PRICE_PER_SHARE);
         vm.stopBroadcast();
 
         _logResults(infra, cfg, feeCharged);

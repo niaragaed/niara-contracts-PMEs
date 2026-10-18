@@ -135,26 +135,28 @@ contract DemoSepolia is Script {
         internal
         returns (address token, address oferta)
     {
-        token = infra.tokenFactory.criarOferta(
-            "Oferta Demo Sepolia",
-            "nCAP",
-            "Empresa Captacao Demo Ltda",
-            keccak256(abi.encode("cnpj-demo-sepolia", block.timestamp)),
-            "2026-DEMO-SEPOLIA"
-        );
+        token = infra.tokenFactory
+            .criarOferta(
+                "Oferta Demo Sepolia",
+                "nCAP",
+                "Empresa Captacao Demo Ltda",
+                keccak256(abi.encode("cnpj-demo-sepolia", block.timestamp)),
+                "2026-DEMO-SEPOLIA"
+            );
         infra.gateway.atestarCotas(token, (MAX_TARGET / PRICE_PER_SHARE) * 1 ether);
 
-        oferta = infra.fundraisingFactory.criarCaptacao(
-            token,
-            MIN_TARGET,
-            MAX_TARGET,
-            PRICE_PER_SHARE,
-            block.timestamp + DEADLINE_SECONDS,
-            PER_INVESTOR_CAP,
-            FEE_BPS,
-            cfg.issuerWallet,
-            cfg.protocolWallet
-        );
+        oferta = infra.fundraisingFactory
+            .criarCaptacao(
+                token,
+                MIN_TARGET,
+                MAX_TARGET,
+                PRICE_PER_SHARE,
+                block.timestamp + DEADLINE_SECONDS,
+                PER_INVESTOR_CAP,
+                FEE_BPS,
+                cfg.issuerWallet,
+                cfg.protocolWallet
+            );
         infra.gateway.registrarCaptacao(token, oferta);
     }
 
@@ -178,7 +180,9 @@ contract DemoSepolia is Script {
         console2.log("== DemoSepolia: ciclo completo ==");
         console2.log("Token (ParticipacaoToken):", token);
         console2.log("Offering (OfertaCaptacao escrow):", oferta);
-        console2.log("Final state (1 = EncerradaSucesso, closed with success):", uint256(OfertaCaptacao(oferta).estado()));
+        console2.log(
+            "Final state (1 = EncerradaSucesso, closed with success):", uint256(OfertaCaptacao(oferta).estado())
+        );
         console2.log("Total raised:", OfertaCaptacao(oferta).totalArrecadado());
         console2.log("");
         console2.log("Investor 1 shares:", ParticipacaoToken(token).balanceOf(cfg.investor1));

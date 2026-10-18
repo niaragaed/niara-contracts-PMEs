@@ -96,11 +96,23 @@ contract DeployFase2SepoliaExecute is Script {
         console2.log("Admin/agente (--account):", admin);
         console2.log("");
         console2.log("AGENTE_ROLE confirmado:");
-        console2.log("  orquestrador em tokenFactory:", infra.tokenFactory.hasRole(infra.orchestrator.AGENTE_ROLE(), address(infra.orchestrator)));
-        console2.log("  orquestrador em gateway:", infra.gateway.hasRole(infra.orchestrator.AGENTE_ROLE(), address(infra.orchestrator)));
-        console2.log("  orquestrador em captacaoFactory:", infra.fundraisingFactory.hasRole(infra.orchestrator.AGENTE_ROLE(), address(infra.orchestrator)));
+        console2.log(
+            "  orquestrador em tokenFactory:",
+            infra.tokenFactory.hasRole(infra.orchestrator.AGENTE_ROLE(), address(infra.orchestrator))
+        );
+        console2.log(
+            "  orquestrador em gateway:",
+            infra.gateway.hasRole(infra.orchestrator.AGENTE_ROLE(), address(infra.orchestrator))
+        );
+        console2.log(
+            "  orquestrador em captacaoFactory:",
+            infra.fundraisingFactory.hasRole(infra.orchestrator.AGENTE_ROLE(), address(infra.orchestrator))
+        );
         console2.log("  admin no orquestrador:", infra.orchestrator.hasRole(infra.orchestrator.AGENTE_ROLE(), admin));
-        console2.log("  admin no registro (RegistroInvestidorQualificado):", infra.registry.hasRole(infra.orchestrator.AGENTE_ROLE(), admin));
+        console2.log(
+            "  admin no registro (RegistroInvestidorQualificado):",
+            infra.registry.hasRole(infra.orchestrator.AGENTE_ROLE(), admin)
+        );
         console2.log("");
         console2.log("Issuer authorized (emissoresAutorizados == true expected):", emissorWallet);
         console2.log("");

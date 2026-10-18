@@ -125,9 +125,8 @@ contract InvariantCaptacaoTest is Test {
         uint256 n = handler.numCaptacoes();
         for (uint256 i = 0; i < n; i++) {
             OfertaCaptacao oferta = OfertaCaptacao(handler.captacoes(i));
-            uint256 expected = oferta.recursosLiberados()
-                ? 0
-                : oferta.totalArrecadado() - handler.ghost_sumRefunded(address(oferta));
+            uint256 expected =
+                oferta.recursosLiberados() ? 0 : oferta.totalArrecadado() - handler.ghost_sumRefunded(address(oferta));
             assertEq(moeda.balanceOf(address(oferta)), expected);
         }
     }

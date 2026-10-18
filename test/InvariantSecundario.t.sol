@@ -46,8 +46,9 @@ contract InvariantSecundarioTest is Test {
         gateway = new EmissaoGateway(admin, TIMELOCK_DELAY);
         policy = new RestrictedTransferPolicy(admin, TIMELOCK_DELAY);
         tokenImplementation = new ParticipacaoToken();
-        factory =
-            new ParticipacaoTokenFactory(admin, address(tokenImplementation), address(gateway), address(policy), TIMELOCK_DELAY);
+        factory = new ParticipacaoTokenFactory(
+            admin, address(tokenImplementation), address(gateway), address(policy), TIMELOCK_DELAY
+        );
         moeda = new MockBRL();
         settlement = new LiquidacaoSecundaria(admin, address(moeda), address(factory), protocoloWallet, TIMELOCK_DELAY);
     }

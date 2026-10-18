@@ -148,9 +148,10 @@ contract HandlerCaptacao is Test {
         uint256 taxaBps = bound(feeSeed, 0, 100);
 
         address token = Clones.clone(address(tokenImplementation));
-        ParticipacaoToken(token).initialize(
-            "Oferta Captacao", "nCAP", address(gateway), address(policy), "Empresa Captacao", bytes32(0), "2026-A"
-        );
+        ParticipacaoToken(token)
+            .initialize(
+                "Oferta Captacao", "nCAP", address(gateway), address(policy), "Empresa Captacao", bytes32(0), "2026-A"
+            );
 
         vm.prank(agent);
         gateway.atestarCotas(token, (metaMaxima / precoPorCota) * 1 ether);
@@ -159,7 +160,15 @@ contract HandlerCaptacao is Test {
 
         vm.prank(caller);
         address oferta = factory.criarCaptacao(
-            token, metaMinima, metaMaxima, precoPorCota, prazo, tetoPorInvestidor, taxaBps, emissorWallet, protocoloWallet
+            token,
+            metaMinima,
+            metaMaxima,
+            precoPorCota,
+            prazo,
+            tetoPorInvestidor,
+            taxaBps,
+            emissorWallet,
+            protocoloWallet
         );
 
         if (caller != agent) {

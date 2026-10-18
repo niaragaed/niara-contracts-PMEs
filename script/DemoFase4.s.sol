@@ -113,11 +113,16 @@ contract DemoFase4 is Script {
         infra.tokenImplementation = new ParticipacaoToken();
         infra.gateway = new EmissaoGateway(cfg.admin, TIMELOCK_DELAY);
         infra.factory = new ParticipacaoTokenFactory(
-            cfg.admin, address(infra.tokenImplementation), address(infra.gateway), address(infra.denyAll), TIMELOCK_DELAY
+            cfg.admin,
+            address(infra.tokenImplementation),
+            address(infra.gateway),
+            address(infra.denyAll),
+            TIMELOCK_DELAY
         );
         infra.currency = new MockBRL();
-        infra.settlement =
-            new LiquidacaoSecundaria(cfg.admin, address(infra.currency), address(infra.factory), cfg.protocolWallet, TIMELOCK_DELAY);
+        infra.settlement = new LiquidacaoSecundaria(
+            cfg.admin, address(infra.currency), address(infra.factory), cfg.protocolWallet, TIMELOCK_DELAY
+        );
     }
 
     /// @dev Grants AGENTE_ROLE on gateway, factory, restricted and liquidacao, via
@@ -143,9 +148,10 @@ contract DemoFase4 is Script {
     // ── Issuance mini-cycle (the seller comes to hold shares) ──────────────────────────
 
     function _createOfferingAndIssue(Infra memory infra, Config memory cfg) internal {
-        infra.token = infra.factory.criarOferta(
-            "Oferta Demo Fase 4", "nDEMO4", "Empresa Demo Fase 4 Ltda", keccak256("cnpj-demo-fase4"), "2026-A"
-        );
+        infra.token = infra.factory
+            .criarOferta(
+                "Oferta Demo Fase 4", "nDEMO4", "Empresa Demo Fase 4 Ltda", keccak256("cnpj-demo-fase4"), "2026-A"
+            );
 
         infra.gateway.atestarCotas(infra.token, DEMO_AUTHORIZED_SHARES);
         infra.gateway.emitir(infra.token, cfg.seller, DEMO_SELLER_SHARES);
@@ -190,8 +196,8 @@ contract DemoFase4 is Script {
 
     function _trySettle(Infra memory infra, Config memory cfg, address comprador, string memory label) internal {
         vm.startBroadcast(cfg.deployerPrivateKey);
-        try infra.settlement.liquidarCessao(infra.token, cfg.seller, comprador, DEMO_ASSIGNMENT_QUANTITY, DEMO_PRICE_PER_SHARE)
-        {
+        try infra.settlement
+            .liquidarCessao(infra.token, cfg.seller, comprador, DEMO_ASSIGNMENT_QUANTITY, DEMO_PRICE_PER_SHARE) {
             console2.log(string.concat("[INESPERADO] cessao passou: ", label));
             revert("Phase 4: assignment should have reverted");
         } catch {
@@ -202,9 +208,8 @@ contract DemoFase4 is Script {
 
     function _settleSuccessfully(Infra memory infra, Config memory cfg) internal {
         vm.startBroadcast(cfg.deployerPrivateKey);
-        infra.settlement.liquidarCessao(
-            infra.token, cfg.seller, cfg.buyer, DEMO_ASSIGNMENT_QUANTITY, DEMO_PRICE_PER_SHARE
-        );
+        infra.settlement
+            .liquidarCessao(infra.token, cfg.seller, cfg.buyer, DEMO_ASSIGNMENT_QUANTITY, DEMO_PRICE_PER_SHARE);
         vm.stopBroadcast();
         console2.log("[OK] seller -> buyer assignment settled");
     }

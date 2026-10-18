@@ -40,7 +40,8 @@ contract LiquidacaoSecundariaTest is Test {
         moeda = new MockBRL();
 
         ParticipacaoToken tokenImpl = new ParticipacaoToken();
-        factory = new ParticipacaoTokenFactory(admin, address(tokenImpl), address(gateway), address(policy), TIMELOCK_DELAY);
+        factory =
+            new ParticipacaoTokenFactory(admin, address(tokenImpl), address(gateway), address(policy), TIMELOCK_DELAY);
 
         settlement = new LiquidacaoSecundaria(admin, address(moeda), address(factory), protocoloWallet, TIMELOCK_DELAY);
         agentRole = settlement.AGENTE_ROLE();
@@ -126,9 +127,7 @@ contract LiquidacaoSecundariaTest is Test {
     function test_LiquidarCessao_RevertsForUnknownToken() public {
         address unknownToken = makeAddr("tokenDesconhecido");
         vm.prank(agent);
-        vm.expectRevert(
-            abi.encodeWithSelector(LiquidacaoSecundaria.TokenDesconhecido.selector, unknownToken)
-        );
+        vm.expectRevert(abi.encodeWithSelector(LiquidacaoSecundaria.TokenDesconhecido.selector, unknownToken));
         settlement.liquidarCessao(unknownToken, vendedor, comprador, 10 ether, PRICE_PER_SHARE);
     }
 
@@ -289,7 +288,11 @@ contract LiquidacaoSecundariaTest is Test {
         vm.prank(agent);
         vm.expectRevert(
             abi.encodeWithSelector(
-                LiquidacaoSecundaria.CessaoNaoPermitidaPelaPolitica.selector, address(token), vendedor, comprador, 10 ether
+                LiquidacaoSecundaria.CessaoNaoPermitidaPelaPolitica.selector,
+                address(token),
+                vendedor,
+                comprador,
+                10 ether
             )
         );
         settlement.liquidarCessao(address(token), vendedor, comprador, 10 ether, PRICE_PER_SHARE);
@@ -309,7 +312,11 @@ contract LiquidacaoSecundariaTest is Test {
         vm.prank(agent);
         vm.expectRevert(
             abi.encodeWithSelector(
-                LiquidacaoSecundaria.CessaoNaoPermitidaPelaPolitica.selector, address(token), vendedor, comprador, 10 ether
+                LiquidacaoSecundaria.CessaoNaoPermitidaPelaPolitica.selector,
+                address(token),
+                vendedor,
+                comprador,
+                10 ether
             )
         );
         settlement.liquidarCessao(address(token), vendedor, comprador, 10 ether, PRICE_PER_SHARE);
@@ -328,7 +335,11 @@ contract LiquidacaoSecundariaTest is Test {
         vm.prank(agent);
         vm.expectRevert(
             abi.encodeWithSelector(
-                LiquidacaoSecundaria.CessaoNaoPermitidaPelaPolitica.selector, address(token), vendedor, comprador, 10 ether
+                LiquidacaoSecundaria.CessaoNaoPermitidaPelaPolitica.selector,
+                address(token),
+                vendedor,
+                comprador,
+                10 ether
             )
         );
         settlement.liquidarCessao(address(token), vendedor, comprador, 10 ether, PRICE_PER_SHARE);
@@ -462,9 +473,7 @@ contract LiquidacaoSecundariaTest is Test {
 
     function test_SetTaxaSecundarioBps_RevertsAboveMaximo() public {
         vm.prank(admin);
-        vm.expectRevert(
-            abi.encodeWithSelector(LiquidacaoSecundaria.TaxaExcedeMaximo.selector, 101, 100)
-        );
+        vm.expectRevert(abi.encodeWithSelector(LiquidacaoSecundaria.TaxaExcedeMaximo.selector, 101, 100));
         settlement.proposeSetTaxaSecundarioBps(101);
     }
 
@@ -473,9 +482,7 @@ contract LiquidacaoSecundariaTest is Test {
     /// never a pending proposal for a value `propose` would already have rejected), but covered.
     function test_ExecuteSetTaxaSecundarioBps_RevertsAboveMax_EvenWithoutPropose() public {
         vm.prank(admin);
-        vm.expectRevert(
-            abi.encodeWithSelector(LiquidacaoSecundaria.TaxaExcedeMaximo.selector, 101, 100)
-        );
+        vm.expectRevert(abi.encodeWithSelector(LiquidacaoSecundaria.TaxaExcedeMaximo.selector, 101, 100));
         settlement.executeSetTaxaSecundarioBps(101);
     }
 

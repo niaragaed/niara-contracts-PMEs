@@ -25,7 +25,9 @@ contract ParticipacaoTokenTest is Test {
 
         address clone = Clones.clone(address(implementacao));
         token = ParticipacaoToken(clone);
-        token.initialize("Oferta Padaria Silva", "nPAD", gateway, address(policy), "Padaria Silva Ltda", CNPJ_REF, "2026-A");
+        token.initialize(
+            "Oferta Padaria Silva", "nPAD", gateway, address(policy), "Padaria Silva Ltda", CNPJ_REF, "2026-A"
+        );
     }
 
     // ── Initialization ──────────────────────────────────────────────────────────────────
@@ -116,7 +118,9 @@ contract ParticipacaoTokenTest is Test {
         token.setCotasAutorizadas(100 ether);
 
         vm.prank(gateway);
-        vm.expectRevert(abi.encodeWithSelector(ParticipacaoToken.MintExcedeCotasAutorizadas.selector, 101 ether, 100 ether));
+        vm.expectRevert(
+            abi.encodeWithSelector(ParticipacaoToken.MintExcedeCotasAutorizadas.selector, 101 ether, 100 ether)
+        );
         token.mint(alice, 101 ether);
     }
 
@@ -149,7 +153,9 @@ contract ParticipacaoTokenTest is Test {
         assertEq(token.totalSupply(), 100 ether);
 
         vm.prank(gateway);
-        vm.expectRevert(abi.encodeWithSelector(ParticipacaoToken.MintExcedeCotasAutorizadas.selector, 101 ether, 100 ether));
+        vm.expectRevert(
+            abi.encodeWithSelector(ParticipacaoToken.MintExcedeCotasAutorizadas.selector, 101 ether, 100 ether)
+        );
         token.mint(alice, 1 ether);
     }
 

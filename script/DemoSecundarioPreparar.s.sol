@@ -107,13 +107,14 @@ contract DemoSecundarioPreparar is Script {
     // ── Offering + direct issuance to the seller (most direct path, no escrow) ─────────
 
     function _createOfferingAndIssue(Infra memory infra, Config memory cfg) internal returns (address token) {
-        token = infra.tokenFactory.criarOferta(
-            "Oferta Demo Secundario",
-            "nSEC",
-            "Empresa Secundario Demo Ltda",
-            keccak256(abi.encode("cnpj-demo-secundario", block.timestamp)),
-            "2026-DEMO-SECUNDARIO"
-        );
+        token = infra.tokenFactory
+            .criarOferta(
+                "Oferta Demo Secundario",
+                "nSEC",
+                "Empresa Secundario Demo Ltda",
+                keccak256(abi.encode("cnpj-demo-secundario", block.timestamp)),
+                "2026-DEMO-SECUNDARIO"
+            );
         infra.gateway.atestarCotas(token, AUTHORIZED_SHARES);
         infra.gateway.emitir(token, cfg.seller, SELLER_SHARES);
     }
@@ -143,6 +144,8 @@ contract DemoSecundarioPreparar is Script {
         console2.log("Policy migration + opening PROPOSED, executeAfter:", policyExecuteAfter);
         console2.log("Token atualizado em:", OUTPUT_PATH);
         console2.log("");
-        console2.log(">> Wait >= 1 hour of REAL time (the 10-min lock-up will have expired), then run DemoSecundario.s.sol <<");
+        console2.log(
+            ">> Wait >= 1 hour of REAL time (the 10-min lock-up will have expired), then run DemoSecundario.s.sol <<"
+        );
     }
 }
