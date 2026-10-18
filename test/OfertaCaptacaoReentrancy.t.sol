@@ -11,11 +11,12 @@ import {ParticipacaoToken} from "../src/token/ParticipacaoToken.sol";
 import {DenyAllTransferPolicy} from "../src/policies/DenyAllTransferPolicy.sol";
 import {ReentrantMockBRL} from "./mocks/ReentrantMockBRL.sol";
 
-/// @notice Prova dedicada de que `nonReentrant` (+ CEI) barra reentrada nas três funções de
-/// `OfertaCaptacao` que movem moeda: `aportar` (transferFrom de entrada), `reembolsar` e
-/// `liberarParaEmissor` (transfer de saída). Usa `ReentrantMockBRL`, uma moeda maliciosa que
-/// tenta reentrar o alvo configurado a cada `transfer`/`transferFrom` — simula uma stablecoin
-/// de BRL real com hook, já que `MockBRL` (benigna) não exercitaria essa proteção.
+/// @notice Dedicated proof that `nonReentrant` (+ CEI) blocks re-entry into the three
+/// `OfertaCaptacao` functions that move currency: `aportar` (incoming transferFrom),
+/// `reembolsar` and `liberarParaEmissor` (outgoing transfer). Uses `ReentrantMockBRL`, a
+/// malicious currency that tries to re-enter the configured target on every
+/// `transfer`/`transferFrom`, simulating a real BRL stablecoin with a hook, since the benign
+/// `MockBRL` would not exercise this protection.
 contract OfertaCaptacaoReentrancyTest is Test {
     OfertaCaptacao public oferta;
     EmissaoGateway public gateway;
@@ -24,18 +25,18 @@ contract OfertaCaptacaoReentrancyTest is Test {
     ParticipacaoToken public token;
 
     address public admin = makeAddr("admin");
-    address public agente = makeAddr("agente");
+    address public agent = makeAddr("agente");
     address public emissorWallet = makeAddr("emissorWallet");
     address public protocoloWallet = makeAddr("protocoloWallet");
-    address public investidor1 = makeAddr("investidor1");
+    address public investor1 = makeAddr("investidor1");
 
     uint256 public constant TIMELOCK_DELAY = 1 hours;
-    uint256 public constant META_MINIMA = 10_000 ether;
-    uint256 public constant META_MAXIMA = 50_000 ether;
-    uint256 public constant PRECO_POR_COTA = 100 ether;
-    uint256 public constant TETO_POR_INVESTIDOR = 20_000 ether;
-    uint256 public constant TAXA_BPS = 50;
-    uint256 public constant SALDO_INICIAL = 1_000_000 ether;
+    uint256 public constant MIN_TARGET = 10_000 ether;
+    uint256 public constant MAX_TARGET = 50_000 ether;
+    uint256 public constant PRICE_PER_SHARE = 100 ether;
+    uint256 public constant PER_INVESTOR_CAP = 20_000 ether;
+    uint256 public constant FEE_BPS = 50;
+    uint256 public constant INITIAL_BALANCE = 1_000_000 ether;
     uint256 public prazo;
 
     function setUp() public {
@@ -43,20 +44,20 @@ contract OfertaCaptacaoReentrancyTest is Test {
         registro = new RegistroInvestidorQualificado(admin, TIMELOCK_DELAY);
         moeda = new ReentrantMockBRL();
 
-        bytes32 agenteRole = gateway.AGENTE_ROLE();
+        bytes32 agentRole = gateway.AGENTE_ROLE();
         vm.prank(admin);
-        gateway.proposeGrantRole(agenteRole, agente);
+        gateway.proposeGrantRole(agentRole, agent);
         vm.warp(block.timestamp + TIMELOCK_DELAY);
         vm.prank(admin);
-        gateway.executeGrantRole(agenteRole, agente);
+        gateway.executeGrantRole(agentRole, agent);
 
         DenyAllTransferPolicy policy = new DenyAllTransferPolicy();
         ParticipacaoToken tokenImpl = new ParticipacaoToken();
         token = ParticipacaoToken(Clones.clone(address(tokenImpl)));
         token.initialize("Oferta X", "nX", address(gateway), address(policy), "Empresa X", bytes32(0), "2026-A");
 
-        vm.prank(agente);
-        gateway.atestarCotas(address(token), (META_MAXIMA / PRECO_POR_COTA) * 1 ether);
+        vm.prank(agent);
+        gateway.atestarCotas(address(token), (MAX_TARGET / PRICE_PER_SHARE) * 1 ether);
 
         prazo = block.timestamp + 30 days;
 
@@ -70,76 +71,74 @@ contract OfertaCaptacaoReentrancyTest is Test {
                 moeda: address(moeda),
                 emissorWallet: emissorWallet,
                 protocoloWallet: protocoloWallet,
-                metaMinima: META_MINIMA,
-                metaMaxima: META_MAXIMA,
-                precoPorCota: PRECO_POR_COTA,
+                metaMinima: MIN_TARGET,
+                metaMaxima: MAX_TARGET,
+                precoPorCota: PRICE_PER_SHARE,
                 prazo: prazo,
-                tetoPorInvestidor: TETO_POR_INVESTIDOR,
-                taxaBps: TAXA_BPS
+                tetoPorInvestidor: PER_INVESTOR_CAP,
+                taxaBps: FEE_BPS
             })
         );
 
-        vm.prank(agente);
+        vm.prank(agent);
         gateway.registrarCaptacao(address(token), address(oferta));
 
-        moeda.mint(investidor1, SALDO_INICIAL);
-        vm.prank(investidor1);
+        moeda.mint(investor1, INITIAL_BALANCE);
+        vm.prank(investor1);
         moeda.approve(address(oferta), type(uint256).max);
     }
 
     // ── aportar: reentrada via transferFrom (entrada de fundos) ──────────────────────────
 
     function test_Aportar_BlockedByReentrancyGuard() public {
-        moeda.configurarAtaque(
-            address(oferta), abi.encodeWithSelector(OfertaCaptacao.aportar.selector, PRECO_POR_COTA)
-        );
+        moeda.armAttack(address(oferta), abi.encodeWithSelector(OfertaCaptacao.aportar.selector, PRICE_PER_SHARE));
 
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.aportar(1_000 ether);
 
-        assertTrue(moeda.reentradaBloqueada());
+        assertTrue(moeda.reentryBlocked());
         assertEq(oferta.totalArrecadado(), 1_000 ether);
-        assertEq(oferta.aportadoPor(investidor1), 1_000 ether);
+        assertEq(oferta.aportadoPor(investor1), 1_000 ether);
     }
 
-    // ── reembolsar: reentrada via transfer (saída de fundos, fracasso) ───────────────────
+    // ── reembolsar: re-entry via transfer (funds outflow, failure) ───────────────────────
 
     function test_Reembolsar_BlockedByReentrancyGuard() public {
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.aportar(1_000 ether);
         vm.warp(prazo);
         oferta.encerrar();
         assertEq(uint256(oferta.estado()), uint256(OfertaCaptacao.Estado.EncerradaFalha));
 
-        moeda.configurarAtaque(address(oferta), abi.encodeWithSelector(OfertaCaptacao.reembolsar.selector));
+        moeda.armAttack(address(oferta), abi.encodeWithSelector(OfertaCaptacao.reembolsar.selector));
 
-        vm.prank(investidor1);
+        vm.prank(investor1);
         oferta.reembolsar();
 
-        assertTrue(moeda.reentradaBloqueada());
-        assertTrue(oferta.reembolsado(investidor1));
-        assertEq(moeda.balanceOf(investidor1), SALDO_INICIAL); // reembolsado exatamente uma vez
+        assertTrue(moeda.reentryBlocked());
+        assertTrue(oferta.reembolsado(investor1));
+        assertEq(moeda.balanceOf(investor1), INITIAL_BALANCE); // refunded exactly once
     }
 
-    // ── liberarParaEmissor: reentrada via transfer (saída de fundos, sucesso) ────────────
+    // ── liberarParaEmissor: re-entry via transfer (funds outflow, success) ───────────────
 
     function test_LiberarParaEmissor_BlockedByReentrancyGuard() public {
-        vm.prank(investidor1);
-        oferta.aportar(META_MINIMA);
+        vm.prank(investor1);
+        oferta.aportar(MIN_TARGET);
         vm.warp(prazo);
         oferta.encerrar();
         assertEq(uint256(oferta.estado()), uint256(OfertaCaptacao.Estado.EncerradaSucesso));
 
-        moeda.configurarAtaque(address(oferta), abi.encodeWithSelector(OfertaCaptacao.liberarParaEmissor.selector));
+        moeda.armAttack(address(oferta), abi.encodeWithSelector(OfertaCaptacao.liberarParaEmissor.selector));
 
         oferta.liberarParaEmissor();
 
-        assertTrue(moeda.reentradaBloqueada());
+        assertTrue(moeda.reentryBlocked());
         assertTrue(oferta.recursosLiberados());
 
-        uint256 taxaEsperada = (META_MINIMA * TAXA_BPS) / 10_000;
-        assertEq(moeda.balanceOf(protocoloWallet), taxaEsperada);
-        assertEq(moeda.balanceOf(emissorWallet), META_MINIMA - taxaEsperada);
+        uint256 expectedFee = (MIN_TARGET * FEE_BPS) / 10_000;
+        assertEq(moeda.balanceOf(protocoloWallet), expectedFee);
+        assertEq(moeda.balanceOf(emissorWallet), MIN_TARGET - expectedFee);
         assertEq(moeda.balanceOf(address(oferta)), 0);
     }
 }

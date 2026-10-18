@@ -9,23 +9,22 @@ import {RegistroInvestidorQualificado} from "../src/registro/RegistroInvestidorQ
 import {OfertaCaptacaoFactory} from "../src/captacao/OfertaCaptacaoFactory.sol";
 import {OfertaOrquestrador} from "../src/orquestracao/OfertaOrquestrador.sol";
 
-/// @title DeployFase2SepoliaExecute
-/// @notice Parte 2/2 — rodar só depois de `DeployFase2Sepolia.s.sol` e de >= 1h de tempo REAL
-/// terem decorrido (ver NatSpec daquele script sobre por que o timelock não pode ser pulado em
-/// rede real). Lê os 9 endereços implantados em `./script/output/fase2-sepolia.json` — nunca
-/// recebidos por variável de ambiente digitada à mão (nove endereços é convite a erro de
-/// digitação; um errado aponta a execução para o contrato errado). Executa as 5 concessões de
-/// `AGENTE_ROLE` propostas (incluindo `RegistroInvestidorQualificado`, pré-requisito de
-/// `definirQualificado` para qualquer investidor que precise aportar acima do
-/// `tetoPorInvestidor` de uma oferta — ver NatSpec de `DeployFase2Sepolia.s.sol`) e autoriza o
-/// primeiro emissor a operar o canal self-service.
-/// @dev Único signatário: a conta resolvida por `--account` (a mesma usada no deploy — precisa
-/// deter `DEFAULT_ADMIN_ROLE` nos cinco contratos, concedido a ela mesma no script anterior).
-/// Idempotente: cada `executeGrantRole` checa `hasRole` antes e pula se já concedido — rodar
-/// este script mais de uma vez não quebra (`autorizarEmissor` também é naturalmente idempotente:
-/// gravar `true` de novo não tem efeito colateral).
+/// @title DeployFase2SepoliaExecute (Phase 2 Sepolia execution)
+/// @notice Part 2/2. Run only after `DeployFase2Sepolia.s.sol` and after >= 1h of REAL time has
+/// passed (see that script's NatSpec on why the timelock cannot be skipped on a real network).
+/// Reads the 9 addresses deployed in `./script/output/fase2-sepolia.json`, never received
+/// through hand-typed environment variables (nine addresses invite typos; a wrong one points the
+/// execution at the wrong contract). Executes the 5 proposed `AGENTE_ROLE` grants (including
+/// `RegistroInvestidorQualificado`, a prerequisite of `definirQualificado` for any investor who
+/// needs to invest above an offering's `tetoPorInvestidor`; see `DeployFase2Sepolia.s.sol`'s
+/// NatSpec) and authorizes the first issuer to operate the self-service channel.
+/// @dev Single signer: the account resolved by `--account` (the same one used in the deploy; it
+/// must hold `DEFAULT_ADMIN_ROLE` on the five contracts, granted to itself in the previous
+/// script). Idempotent: each `executeGrantRole` checks `hasRole` first and skips if already
+/// granted, so running this script more than once does not break (`autorizarEmissor` is also
+/// naturally idempotent: writing `true` again has no side effect).
 ///
-/// Uso:
+/// Usage:
 ///   EMISSOR_WALLET_ADDRESS=0x... \
 ///   forge script script/DeployFase2SepoliaExecute.s.sol --rpc-url sepolia --account niara-admin \
 ///     --broadcast
@@ -33,79 +32,91 @@ contract DeployFase2SepoliaExecute is Script {
     uint256 internal constant SEPOLIA_CHAIN_ID = 11155111;
     string internal constant OUTPUT_PATH = "./script/output/fase2-sepolia.json";
 
-    error RedeInvalida(uint256 chainIdAtual, uint256 chainIdEsperado);
-    error ArquivoDeEnderecosNaoEncontrado(string caminho);
+    error InvalidNetwork(uint256 currentChainId, uint256 expectedChainId);
+    error AddressFileNotFound(string path);
 
     struct Infra {
         ParticipacaoTokenFactory tokenFactory;
         EmissaoGateway gateway;
-        RegistroInvestidorQualificado registro;
-        OfertaCaptacaoFactory captacaoFactory;
-        OfertaOrquestrador orquestrador;
+        RegistroInvestidorQualificado registry;
+        OfertaCaptacaoFactory fundraisingFactory;
+        OfertaOrquestrador orchestrator;
     }
 
     function run() external {
-        if (block.chainid != SEPOLIA_CHAIN_ID) revert RedeInvalida(block.chainid, SEPOLIA_CHAIN_ID);
-        if (!vm.isFile(OUTPUT_PATH)) revert ArquivoDeEnderecosNaoEncontrado(OUTPUT_PATH);
+        if (block.chainid != SEPOLIA_CHAIN_ID) revert InvalidNetwork(block.chainid, SEPOLIA_CHAIN_ID);
+        if (!vm.isFile(OUTPUT_PATH)) revert AddressFileNotFound(OUTPUT_PATH);
 
-        Infra memory infra = _lerEnderecos();
+        Infra memory infra = _readAddresses();
         address emissorWallet = vm.envAddress("EMISSOR_WALLET_ADDRESS");
 
         vm.startBroadcast();
         address admin = msg.sender;
 
-        _executarAgentePendente(infra, admin);
-        infra.orquestrador.autorizarEmissor(emissorWallet);
+        _executePendingAgent(infra, admin);
+        infra.orchestrator.autorizarEmissor(emissorWallet);
         vm.stopBroadcast();
 
-        _logResultados(infra, admin, emissorWallet);
+        _logResults(infra, admin, emissorWallet);
     }
 
-    function _lerEnderecos() internal returns (Infra memory infra) {
+    function _readAddresses() internal returns (Infra memory infra) {
         string memory json = vm.readFile(OUTPUT_PATH);
         infra.tokenFactory = ParticipacaoTokenFactory(vm.parseJsonAddress(json, ".tokenFactory"));
         infra.gateway = EmissaoGateway(vm.parseJsonAddress(json, ".gateway"));
-        infra.registro = RegistroInvestidorQualificado(vm.parseJsonAddress(json, ".registro"));
-        infra.captacaoFactory = OfertaCaptacaoFactory(vm.parseJsonAddress(json, ".captacaoFactory"));
-        infra.orquestrador = OfertaOrquestrador(vm.parseJsonAddress(json, ".orquestrador"));
+        infra.registry = RegistroInvestidorQualificado(vm.parseJsonAddress(json, ".registry"));
+        infra.fundraisingFactory = OfertaCaptacaoFactory(vm.parseJsonAddress(json, ".fundraisingFactory"));
+        infra.orchestrator = OfertaOrquestrador(vm.parseJsonAddress(json, ".orquestrador"));
     }
 
-    /// @dev Idempotente: confere `hasRole` antes de cada `executeGrantRole` e pula se já
-    /// concedido, em vez de deixar `_consumeAction` reverter com `ActionNotPending` numa segunda
-    /// chamada. Se o timelock ainda não tiver decorrido, `executeGrantRole` reverte com
-    /// `TimelockNotElapsed` (esperado, não é bug — ver CLAUDE.md).
-    function _executarAgentePendente(Infra memory infra, address admin) internal {
-        bytes32 agenteRole = infra.orquestrador.AGENTE_ROLE();
+    /// @dev Idempotent: checks `hasRole` before each `executeGrantRole` and skips if already
+    /// granted, instead of letting `_consumeAction` revert with `ActionNotPending` on a second
+    /// call. If the timelock has not passed yet, `executeGrantRole` reverts with
+    /// `TimelockNotElapsed` (expected, not a bug; see CLAUDE.md).
+    function _executePendingAgent(Infra memory infra, address admin) internal {
+        bytes32 agentRole = infra.orchestrator.AGENTE_ROLE();
 
-        _executarSeNecessario(infra.tokenFactory, agenteRole, address(infra.orquestrador));
-        _executarSeNecessario(infra.gateway, agenteRole, address(infra.orquestrador));
-        _executarSeNecessario(infra.captacaoFactory, agenteRole, address(infra.orquestrador));
-        _executarSeNecessario(infra.orquestrador, agenteRole, admin);
-        _executarSeNecessario(infra.registro, agenteRole, admin);
+        _executeIfNeeded(infra.tokenFactory, agentRole, address(infra.orchestrator));
+        _executeIfNeeded(infra.gateway, agentRole, address(infra.orchestrator));
+        _executeIfNeeded(infra.fundraisingFactory, agentRole, address(infra.orchestrator));
+        _executeIfNeeded(infra.orchestrator, agentRole, admin);
+        _executeIfNeeded(infra.registry, agentRole, admin);
     }
 
-    function _executarSeNecessario(TimelockedAccessControl alvo, bytes32 role, address account) internal {
-        if (alvo.hasRole(role, account)) {
-            console2.log("Ja concedido, pulando:", address(alvo));
+    function _executeIfNeeded(TimelockedAccessControl target, bytes32 role, address account) internal {
+        if (target.hasRole(role, account)) {
+            console2.log("Already granted, skipping:", address(target));
             return;
         }
-        alvo.executeGrantRole(role, account);
+        target.executeGrantRole(role, account);
     }
 
-    function _logResultados(Infra memory infra, address admin, address emissorWallet) internal view {
+    function _logResults(Infra memory infra, address admin, address emissorWallet) internal view {
         console2.log("== DeployFase2SepoliaExecute ==");
         console2.log("Admin/agente (--account):", admin);
         console2.log("");
         console2.log("AGENTE_ROLE confirmado:");
-        console2.log("  orquestrador em tokenFactory:", infra.tokenFactory.hasRole(infra.orquestrador.AGENTE_ROLE(), address(infra.orquestrador)));
-        console2.log("  orquestrador em gateway:", infra.gateway.hasRole(infra.orquestrador.AGENTE_ROLE(), address(infra.orquestrador)));
-        console2.log("  orquestrador em captacaoFactory:", infra.captacaoFactory.hasRole(infra.orquestrador.AGENTE_ROLE(), address(infra.orquestrador)));
-        console2.log("  admin no orquestrador:", infra.orquestrador.hasRole(infra.orquestrador.AGENTE_ROLE(), admin));
-        console2.log("  admin no registro (RegistroInvestidorQualificado):", infra.registro.hasRole(infra.orquestrador.AGENTE_ROLE(), admin));
+        console2.log(
+            "  orquestrador em tokenFactory:",
+            infra.tokenFactory.hasRole(infra.orchestrator.AGENTE_ROLE(), address(infra.orchestrator))
+        );
+        console2.log(
+            "  orquestrador em gateway:",
+            infra.gateway.hasRole(infra.orchestrator.AGENTE_ROLE(), address(infra.orchestrator))
+        );
+        console2.log(
+            "  orquestrador em captacaoFactory:",
+            infra.fundraisingFactory.hasRole(infra.orchestrator.AGENTE_ROLE(), address(infra.orchestrator))
+        );
+        console2.log("  admin no orquestrador:", infra.orchestrator.hasRole(infra.orchestrator.AGENTE_ROLE(), admin));
+        console2.log(
+            "  admin no registro (RegistroInvestidorQualificado):",
+            infra.registry.hasRole(infra.orchestrator.AGENTE_ROLE(), admin)
+        );
         console2.log("");
-        console2.log("Emissor autorizado (emissoresAutorizados == true esperado):", emissorWallet);
+        console2.log("Issuer authorized (emissoresAutorizados == true expected):", emissorWallet);
         console2.log("");
-        console2.log(">> O emissor agora cria a propria oferta chamando criarOfertaCompleta em");
-        console2.log(">> OfertaOrquestrador, da PROPRIA carteira (cast send --account <nome do emissor>).");
+        console2.log(">> The issuer now creates its own offering by calling criarOfertaCompleta on");
+        console2.log(">> OfertaOrquestrador, from its OWN wallet (cast send --account <issuer name>).");
     }
 }

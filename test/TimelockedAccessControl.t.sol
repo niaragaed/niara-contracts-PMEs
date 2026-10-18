@@ -6,10 +6,10 @@ import {TimelockHarness} from "./mocks/TimelockHarness.sol";
 import {TimelockedAccessControl} from "../src/governance/TimelockedAccessControl.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
-/// @notice `token.ALGO_ROLE()` e afins são chamadas externas (staticcall) — se aparecerem na
-/// mesma linha que um `vm.prank`/`vm.expectRevert` destinado a outra chamada, "roubam" o
-/// cheatcode (que se aplica só à próxima chamada externa). Por isso todo bytes32 de papel é
-/// resolvido em variável fora de qualquer prank.
+/// @notice `token.SOME_ROLE()` and similar are external calls (staticcall): if they appear
+/// on the same line as a `vm.prank`/`vm.expectRevert` meant for another call, they "steal"
+/// the cheatcode (which only applies to the next external call). That is why every role
+/// bytes32 is resolved into a variable outside any prank.
 contract TimelockedAccessControlTest is Test {
     TimelockHarness public harness;
 
@@ -43,7 +43,7 @@ contract TimelockedAccessControlTest is Test {
         assertEq(h.timelockDelay(), harness.MIN_TIMELOCK_DELAY());
     }
 
-    // ── Atraso do timelock ──────────────────────────────────────────────────────────────
+    // ── Timelock delay ──────────────────────────────────────────────────────────────────
 
     function test_SetTimelockDelay_RevertsForOutOfBoundsProposal() public {
         uint256 tooHigh = harness.MAX_TIMELOCK_DELAY() + 1;
@@ -86,7 +86,7 @@ contract TimelockedAccessControlTest is Test {
         harness.proposeSetTimelockDelay(5 days);
     }
 
-    // ── Propose/execute genérico ────────────────────────────────────────────────────────
+    // ── Generic propose/execute ─────────────────────────────────────────────────────────
 
     function test_ProposeAction_RevertsIfAlreadyPending() public {
         uint256 newDelay = 5 days;
@@ -142,7 +142,7 @@ contract TimelockedAccessControlTest is Test {
         harness.cancelAction(actionId);
     }
 
-    // ── grantRole/revokeRole padrão desabilitados ──────────────────────────────────────
+    // ── Standard grantRole/revokeRole disabled ─────────────────────────────────────────
 
     function test_GrantRole_AlwaysReverts() public {
         vm.expectRevert(TimelockedAccessControl.RoleChangeRequiresTimelock.selector);

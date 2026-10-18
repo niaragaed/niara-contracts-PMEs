@@ -22,19 +22,19 @@ contract OfertaCaptacaoFactoryTest is Test {
     ParticipacaoToken public token;
 
     address public admin = makeAddr("admin");
-    address public agente = makeAddr("agente");
-    address public estranho = makeAddr("estranho");
+    address public agent = makeAddr("agente");
+    address public stranger = makeAddr("estranho");
     address public emissorWallet = makeAddr("emissorWallet");
     address public protocoloWallet = makeAddr("protocoloWallet");
 
     uint256 public constant TIMELOCK_DELAY = 1 hours;
-    bytes32 public agenteRole;
+    bytes32 public agentRole;
 
-    uint256 public constant META_MINIMA = 10_000 ether;
-    uint256 public constant META_MAXIMA = 50_000 ether;
-    uint256 public constant PRECO_POR_COTA = 1 ether;
-    uint256 public constant TETO_POR_INVESTIDOR = 5_000 ether;
-    uint256 public constant TAXA_BPS = 50;
+    uint256 public constant MIN_TARGET = 10_000 ether;
+    uint256 public constant MAX_TARGET = 50_000 ether;
+    uint256 public constant PRICE_PER_SHARE = 1 ether;
+    uint256 public constant PER_INVESTOR_CAP = 5_000 ether;
+    uint256 public constant FEE_BPS = 50;
 
     function setUp() public {
         gateway = new EmissaoGateway(admin, TIMELOCK_DELAY);
@@ -45,9 +45,9 @@ contract OfertaCaptacaoFactoryTest is Test {
         factory = new OfertaCaptacaoFactory(
             admin, address(implementacao), address(gateway), address(registro), address(moeda), TIMELOCK_DELAY
         );
-        agenteRole = factory.AGENTE_ROLE();
-        _grantRole(address(factory), agenteRole, agente);
-        _grantRole(address(gateway), gateway.AGENTE_ROLE(), agente);
+        agentRole = factory.AGENTE_ROLE();
+        _grantRole(address(factory), agentRole, agent);
+        _grantRole(address(gateway), gateway.AGENTE_ROLE(), agent);
 
         DenyAllTransferPolicy policy = new DenyAllTransferPolicy();
         ParticipacaoToken tokenImpl = new ParticipacaoToken();
@@ -65,20 +65,20 @@ contract OfertaCaptacaoFactoryTest is Test {
         require(ok2, "execute failed");
     }
 
-    function _prazoValido() internal view returns (uint256) {
+    function _validDeadline() internal view returns (uint256) {
         return block.timestamp + 30 days;
     }
 
-    function _criarCaptacao() internal returns (address) {
-        vm.prank(agente);
+    function _createFundraising() internal returns (address) {
+        vm.prank(agent);
         return factory.criarCaptacao(
             address(token),
-            META_MINIMA,
-            META_MAXIMA,
-            PRECO_POR_COTA,
-            _prazoValido(),
-            TETO_POR_INVESTIDOR,
-            TAXA_BPS,
+            MIN_TARGET,
+            MAX_TARGET,
+            PRICE_PER_SHARE,
+            _validDeadline(),
+            PER_INVESTOR_CAP,
+            FEE_BPS,
             emissorWallet,
             protocoloWallet
         );
@@ -95,7 +95,9 @@ contract OfertaCaptacaoFactoryTest is Test {
 
     function test_Constructor_RevertsForZeroImplementacao() public {
         vm.expectRevert(OfertaCaptacaoFactory.ZeroAddress.selector);
-        new OfertaCaptacaoFactory(admin, address(0), address(gateway), address(registro), address(moeda), TIMELOCK_DELAY);
+        new OfertaCaptacaoFactory(
+            admin, address(0), address(gateway), address(registro), address(moeda), TIMELOCK_DELAY
+        );
     }
 
     function test_Constructor_RevertsForZeroGateway() public {
@@ -121,27 +123,27 @@ contract OfertaCaptacaoFactoryTest is Test {
 
     // ── criarCaptacao ───────────────────────────────────────────────────────────────────
 
-    function test_CriarCaptacao_OnlyAgente() public {
-        vm.prank(estranho);
+    function test_CriarCaptacao_OnlyAgent() public {
+        vm.prank(stranger);
         vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, estranho, agenteRole)
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, agentRole)
         );
         factory.criarCaptacao(
             address(token),
-            META_MINIMA,
-            META_MAXIMA,
-            PRECO_POR_COTA,
-            _prazoValido(),
-            TETO_POR_INVESTIDOR,
-            TAXA_BPS,
+            MIN_TARGET,
+            MAX_TARGET,
+            PRICE_PER_SHARE,
+            _validDeadline(),
+            PER_INVESTOR_CAP,
+            FEE_BPS,
             emissorWallet,
             protocoloWallet
         );
     }
 
     function test_CriarCaptacao_ClonesAndInitializes() public {
-        address ofertaAddr = _criarCaptacao();
-        OfertaCaptacao oferta = OfertaCaptacao(ofertaAddr);
+        address offeringAddr = _createFundraising();
+        OfertaCaptacao oferta = OfertaCaptacao(offeringAddr);
 
         assertEq(address(oferta.token()), address(token));
         assertEq(oferta.gateway(), address(gateway));
@@ -149,97 +151,97 @@ contract OfertaCaptacaoFactoryTest is Test {
         assertEq(address(oferta.moeda()), address(moeda));
         assertEq(oferta.emissorWallet(), emissorWallet);
         assertEq(oferta.protocoloWallet(), protocoloWallet);
-        assertEq(oferta.metaMinima(), META_MINIMA);
-        assertEq(oferta.metaMaxima(), META_MAXIMA);
-        assertEq(oferta.precoPorCota(), PRECO_POR_COTA);
-        assertEq(oferta.tetoPorInvestidor(), TETO_POR_INVESTIDOR);
-        assertEq(oferta.taxaBps(), TAXA_BPS);
+        assertEq(oferta.metaMinima(), MIN_TARGET);
+        assertEq(oferta.metaMaxima(), MAX_TARGET);
+        assertEq(oferta.precoPorCota(), PRICE_PER_SHARE);
+        assertEq(oferta.tetoPorInvestidor(), PER_INVESTOR_CAP);
+        assertEq(oferta.taxaBps(), FEE_BPS);
         assertEq(uint256(oferta.estado()), uint256(OfertaCaptacao.Estado.Aberta));
     }
 
     function test_CriarCaptacao_RegistersCaptacao() public {
-        address ofertaAddr = _criarCaptacao();
-        assertTrue(factory.isCaptacao(ofertaAddr));
+        address offeringAddr = _createFundraising();
+        assertTrue(factory.isCaptacao(offeringAddr));
         assertEq(factory.numCaptacoes(), 1);
-        assertEq(factory.captacoes(0), ofertaAddr);
+        assertEq(factory.captacoes(0), offeringAddr);
     }
 
     function test_CriarCaptacao_RevertsForZeroToken() public {
-        vm.prank(agente);
+        vm.prank(agent);
         vm.expectRevert(OfertaCaptacaoFactory.ZeroAddress.selector);
         factory.criarCaptacao(
             address(0),
-            META_MINIMA,
-            META_MAXIMA,
-            PRECO_POR_COTA,
-            _prazoValido(),
-            TETO_POR_INVESTIDOR,
-            TAXA_BPS,
+            MIN_TARGET,
+            MAX_TARGET,
+            PRICE_PER_SHARE,
+            _validDeadline(),
+            PER_INVESTOR_CAP,
+            FEE_BPS,
             emissorWallet,
             protocoloWallet
         );
     }
 
-    function test_CriarCaptacao_RevertsForMetaMinimaAboveMaxima() public {
-        vm.prank(agente);
+    function test_CriarCaptacao_RevertsForMinTargetAboveMax() public {
+        vm.prank(agent);
         vm.expectRevert(
-            abi.encodeWithSelector(OfertaCaptacaoFactory.MetasInvalidas.selector, META_MAXIMA + 1, META_MAXIMA)
+            abi.encodeWithSelector(OfertaCaptacaoFactory.MetasInvalidas.selector, MAX_TARGET + 1, MAX_TARGET)
         );
         factory.criarCaptacao(
             address(token),
-            META_MAXIMA + 1,
-            META_MAXIMA,
-            PRECO_POR_COTA,
-            _prazoValido(),
-            TETO_POR_INVESTIDOR,
-            TAXA_BPS,
+            MAX_TARGET + 1,
+            MAX_TARGET,
+            PRICE_PER_SHARE,
+            _validDeadline(),
+            PER_INVESTOR_CAP,
+            FEE_BPS,
             emissorWallet,
             protocoloWallet
         );
     }
 
     function test_CriarCaptacao_RevertsForZeroPreco() public {
-        vm.prank(agente);
+        vm.prank(agent);
         vm.expectRevert(OfertaCaptacaoFactory.PrecoInvalido.selector);
         factory.criarCaptacao(
             address(token),
-            META_MINIMA,
-            META_MAXIMA,
+            MIN_TARGET,
+            MAX_TARGET,
             0,
-            _prazoValido(),
-            TETO_POR_INVESTIDOR,
-            TAXA_BPS,
+            _validDeadline(),
+            PER_INVESTOR_CAP,
+            FEE_BPS,
             emissorWallet,
             protocoloWallet
         );
     }
 
-    function test_CriarCaptacao_RevertsForPastPrazo() public {
-        vm.prank(agente);
+    function test_CriarCaptacao_RevertsForPastDeadline() public {
+        vm.prank(agent);
         vm.expectRevert(abi.encodeWithSelector(OfertaCaptacaoFactory.PrazoInvalido.selector, block.timestamp));
         factory.criarCaptacao(
             address(token),
-            META_MINIMA,
-            META_MAXIMA,
-            PRECO_POR_COTA,
+            MIN_TARGET,
+            MAX_TARGET,
+            PRICE_PER_SHARE,
             block.timestamp,
-            TETO_POR_INVESTIDOR,
-            TAXA_BPS,
+            PER_INVESTOR_CAP,
+            FEE_BPS,
             emissorWallet,
             protocoloWallet
         );
     }
 
     function test_CriarCaptacao_RevertsForTaxaAboveMaximo() public {
-        vm.prank(agente);
+        vm.prank(agent);
         vm.expectRevert(abi.encodeWithSelector(OfertaCaptacaoFactory.TaxaExcedeMaximo.selector, 101, 100));
         factory.criarCaptacao(
             address(token),
-            META_MINIMA,
-            META_MAXIMA,
-            PRECO_POR_COTA,
-            _prazoValido(),
-            TETO_POR_INVESTIDOR,
+            MIN_TARGET,
+            MAX_TARGET,
+            PRICE_PER_SHARE,
+            _validDeadline(),
+            PER_INVESTOR_CAP,
             101,
             emissorWallet,
             protocoloWallet
@@ -247,85 +249,85 @@ contract OfertaCaptacaoFactoryTest is Test {
     }
 
     function test_CriarCaptacao_RevertsWhenPaused() public {
-        vm.prank(agente);
+        vm.prank(agent);
         factory.pause();
 
-        vm.prank(agente);
+        vm.prank(agent);
         vm.expectRevert(Pausable.EnforcedPause.selector);
         factory.criarCaptacao(
             address(token),
-            META_MINIMA,
-            META_MAXIMA,
-            PRECO_POR_COTA,
-            _prazoValido(),
-            TETO_POR_INVESTIDOR,
-            TAXA_BPS,
+            MIN_TARGET,
+            MAX_TARGET,
+            PRICE_PER_SHARE,
+            _validDeadline(),
+            PER_INVESTOR_CAP,
+            FEE_BPS,
             emissorWallet,
             protocoloWallet
         );
     }
 
     function test_CriarCaptacao_MultipleOffersAreIndependentClones() public {
-        address ofertaA = _criarCaptacao();
-        address ofertaB = _criarCaptacao();
+        address offeringA = _createFundraising();
+        address offeringB = _createFundraising();
 
-        assertTrue(ofertaA != ofertaB);
+        assertTrue(offeringA != offeringB);
         assertEq(factory.numCaptacoes(), 2);
     }
 
     // ── Pausa ───────────────────────────────────────────────────────────────────────────
 
-    function test_Pause_OnlyAgente() public {
-        vm.prank(estranho);
+    function test_Pause_OnlyAgent() public {
+        vm.prank(stranger);
         vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, estranho, agenteRole)
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, agentRole)
         );
         factory.pause();
     }
 
     function test_PauseUnpause_RoundTrip() public {
-        vm.prank(agente);
+        vm.prank(agent);
         factory.pause();
         assertTrue(factory.paused());
 
-        vm.prank(agente);
+        vm.prank(agent);
         factory.unpause();
         assertFalse(factory.paused());
     }
 
-    // ── Troca de implementação via timelock ─────────────────────────────────────────────
+    // ── Implementation swap via timelock ────────────────────────────────────────────────
 
     function test_SetImplementacao_RequiresTimelock() public {
-        OfertaCaptacao novaImpl = new OfertaCaptacao();
+        OfertaCaptacao newImpl = new OfertaCaptacao();
 
         vm.prank(admin);
-        factory.proposeSetImplementacao(address(novaImpl));
+        factory.proposeSetImplementacao(address(newImpl));
 
         vm.prank(admin);
         vm.expectRevert();
-        factory.executeSetImplementacao(address(novaImpl));
+        factory.executeSetImplementacao(address(newImpl));
 
         vm.warp(block.timestamp + TIMELOCK_DELAY);
         vm.prank(admin);
-        factory.executeSetImplementacao(address(novaImpl));
+        factory.executeSetImplementacao(address(newImpl));
 
-        assertEq(factory.implementacao(), address(novaImpl));
+        assertEq(factory.implementacao(), address(newImpl));
     }
 
     function test_SetImplementacao_OnlyAffectsFutureOffers() public {
-        address ofertaAntiga = _criarCaptacao();
+        address oldOffering = _createFundraising();
 
-        OfertaCaptacao novaImpl = new OfertaCaptacao();
+        OfertaCaptacao newImpl = new OfertaCaptacao();
         vm.prank(admin);
-        factory.proposeSetImplementacao(address(novaImpl));
+        factory.proposeSetImplementacao(address(newImpl));
         vm.warp(block.timestamp + TIMELOCK_DELAY);
         vm.prank(admin);
-        factory.executeSetImplementacao(address(novaImpl));
+        factory.executeSetImplementacao(address(newImpl));
 
-        address ofertaNova = _criarCaptacao();
+        address newOffering = _createFundraising();
 
-        assertTrue(ofertaAntiga != ofertaNova);
-        assertEq(uint256(OfertaCaptacao(ofertaAntiga).estado()), uint256(OfertaCaptacao.Estado.Aberta));
+        assertTrue(oldOffering != newOffering);
+        assertEq(uint256(OfertaCaptacao(oldOffering).estado()), uint256(OfertaCaptacao.Estado.Aberta));
     }
 
     function test_SetImplementacao_RevertsForZeroAddress() public {

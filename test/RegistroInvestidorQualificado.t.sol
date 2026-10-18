@@ -9,18 +9,18 @@ contract RegistroInvestidorQualificadoTest is Test {
     RegistroInvestidorQualificado public registro;
 
     address public admin = makeAddr("admin");
-    address public agente = makeAddr("agente");
-    address public estranho = makeAddr("estranho");
+    address public agent = makeAddr("agente");
+    address public stranger = makeAddr("estranho");
     address public investidor = makeAddr("investidor");
 
     uint256 public constant TIMELOCK_DELAY = 1 hours;
     bytes32 public constant DEFAULT_ADMIN_ROLE = bytes32(0);
-    bytes32 public agenteRole;
+    bytes32 public agentRole;
 
     function setUp() public {
         registro = new RegistroInvestidorQualificado(admin, TIMELOCK_DELAY);
-        agenteRole = registro.AGENTE_ROLE();
-        _grantRole(agenteRole, agente);
+        agentRole = registro.AGENTE_ROLE();
+        _grantRole(agentRole, agent);
     }
 
     function _grantRole(bytes32 role, address account) internal {
@@ -44,10 +44,10 @@ contract RegistroInvestidorQualificadoTest is Test {
 
     // ── definirQualificado ──────────────────────────────────────────────────────────────
 
-    function test_DefinirQualificado_OnlyAgente() public {
-        vm.prank(estranho);
+    function test_DefinirQualificado_OnlyAgent() public {
+        vm.prank(stranger);
         vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, estranho, agenteRole)
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, agentRole)
         );
         registro.definirQualificado(investidor, true);
     }
@@ -55,25 +55,25 @@ contract RegistroInvestidorQualificadoTest is Test {
     function test_DefinirQualificado_SetsFlag() public {
         assertFalse(registro.ehQualificado(investidor));
 
-        vm.prank(agente);
+        vm.prank(agent);
         registro.definirQualificado(investidor, true);
 
         assertTrue(registro.ehQualificado(investidor));
     }
 
     function test_DefinirQualificado_IsImmediateNoTimelock() public {
-        // Ação operacional: nenhuma proposta/timelock envolvida, efeito imediato.
-        vm.prank(agente);
+        // Operational action: no proposal/timelock involved, immediate effect.
+        vm.prank(agent);
         registro.definirQualificado(investidor, true);
         assertTrue(registro.ehQualificado(investidor));
     }
 
     function test_DefinirQualificado_CanRevoke() public {
-        vm.prank(agente);
+        vm.prank(agent);
         registro.definirQualificado(investidor, true);
         assertTrue(registro.ehQualificado(investidor));
 
-        vm.prank(agente);
+        vm.prank(agent);
         registro.definirQualificado(investidor, false);
         assertFalse(registro.ehQualificado(investidor));
     }
@@ -81,7 +81,7 @@ contract RegistroInvestidorQualificadoTest is Test {
     function test_DefinirQualificado_EmitsEvent() public {
         vm.expectEmit(true, true, true, true, address(registro));
         emit RegistroInvestidorQualificado.QualificacaoAlterada(investidor, true);
-        vm.prank(agente);
+        vm.prank(agent);
         registro.definirQualificado(investidor, true);
     }
 }

@@ -4,13 +4,13 @@ pragma solidity ^0.8.24;
 import {ITransferPolicy} from "../interfaces/ITransferPolicy.sol";
 
 /// @title DenyAllTransferPolicy
-/// @notice Política-padrão da Fase 1: nega toda transferência titular→titular. O mercado
-/// secundário fica totalmente desligado — cotas só se movem por mint (captação) e, no futuro,
-/// por caminhos explícitos ainda não implementados. Substituível por governança (via troca do
-/// endereço de política, ver `ParticipacaoTokenFactory`) sem tocar no token; a política
-/// sofisticada (lock-up + allowlist + flag de liberação) é Fase 3.
+/// @notice Phase 1 default policy: denies every holder→holder transfer. The secondary market
+/// is fully off: shares only move by mint (fundraising) and, in the future, through explicit
+/// paths not implemented yet. Replaceable by governance (by changing the policy address, see
+/// `ParticipacaoTokenFactory`) without touching the token; the sophisticated policy (lock-up +
+/// allowlist + release flag) is Phase 3.
 contract DenyAllTransferPolicy is ITransferPolicy {
-    /// @notice Sempre retorna `false` — nenhuma transferência titular→titular é permitida.
+    /// @notice Always returns `false`: no holder→holder transfer is allowed.
     function canTransfer(address, address, address, uint256) external pure returns (bool) {
         return false;
     }

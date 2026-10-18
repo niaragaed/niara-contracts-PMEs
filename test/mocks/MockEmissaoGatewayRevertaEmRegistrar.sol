@@ -1,22 +1,22 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-/// @notice Mock de teste: aceita `atestarCotas` como no-op (sempre sucesso) e reverte
-/// deliberadamente em `registrarCaptacao`, para provar que
-/// `OfertaOrquestrador.criarOfertaCompleta` desfaz atomicamente TODAS as subchamadas
-/// anteriores (incluindo os dois `Clones.clone`) quando a quarta chamada falha.
-/// @dev Não é possível forçar essa falha usando só os contratos reais: `EmissaoGateway.
-/// registrarCaptacao` não tem nenhuma validação além do mesmo `AGENTE_ROLE` que já protege
-/// `atestarCotas` (a segunda chamada) — então, com contratos reais, faltar o papel sempre
-/// derrubaria a chamada 2, nunca isoladamente a 4ª. Este mock substitui só o `emissaoGateway`
-/// de uma instância de `OfertaOrquestrador` dedicada a este teste; `tokenFactory` e
-/// `captacaoFactory` continuam sendo os contratos reais.
+/// @notice Test mock: accepts `atestarCotas` as a no-op (always succeeds) and deliberately
+/// reverts on `registrarCaptacao`, to prove that `OfertaOrquestrador.criarOfertaCompleta`
+/// atomically undoes ALL earlier subcalls (including both `Clones.clone` calls) when the
+/// fourth call fails.
+/// @dev This failure cannot be forced with the real contracts only: `EmissaoGateway.
+/// registrarCaptacao` has no validation beyond the same `AGENTE_ROLE` that already protects
+/// `atestarCotas` (the second call), so with real contracts a missing role would always take
+/// down call 2, never the 4th in isolation. This mock replaces only the `emissaoGateway` of an
+/// `OfertaOrquestrador` instance dedicated to this test; `tokenFactory` and `captacaoFactory`
+/// are still the real contracts.
 contract MockEmissaoGatewayRevertaEmRegistrar {
-    error FalhaForcadaParaTeste();
+    error ForcedTestFailure();
 
     function atestarCotas(address, uint256) external pure {}
 
     function registrarCaptacao(address, address) external pure {
-        revert FalhaForcadaParaTeste();
+        revert ForcedTestFailure();
     }
 }

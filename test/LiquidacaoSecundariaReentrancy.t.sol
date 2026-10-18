@@ -9,29 +9,29 @@ import {RestrictedTransferPolicy} from "../src/policies/RestrictedTransferPolicy
 import {LiquidacaoSecundaria} from "../src/secundario/LiquidacaoSecundaria.sol";
 import {ReentrantMockBRL} from "./mocks/ReentrantMockBRL.sol";
 
-/// @notice Prova dedicada de que `nonReentrant` (+ CEI) barra reentrada em `liquidarCessao` —
-/// mesmo padrão de `test/OfertaCaptacaoReentrancy.t.sol` (Fase 2, ver CLAUDE.md). Usa
-/// `ReentrantMockBRL`, que tenta reentrar o alvo configurado a partir do seu próprio
-/// `transferFrom`, simulando uma stablecoin de BRL real com hook/callback — `MockBRL` (benigna)
-/// não exercitaria essa proteção.
+/// @notice Dedicated proof that `nonReentrant` (+ CEI) blocks re-entry into `liquidarCessao`,
+/// same pattern as `test/OfertaCaptacaoReentrancy.t.sol` (Phase 2, see CLAUDE.md). Uses
+/// `ReentrantMockBRL`, which tries to re-enter the configured target from its own
+/// `transferFrom`, simulating a real BRL stablecoin with a hook/callback; the benign `MockBRL`
+/// would not exercise this protection.
 contract LiquidacaoSecundariaReentrancyTest is Test {
     EmissaoGateway public gateway;
     ParticipacaoTokenFactory public factory;
     RestrictedTransferPolicy public policy;
     ReentrantMockBRL public moeda;
-    LiquidacaoSecundaria public liquidacao;
+    LiquidacaoSecundaria public settlement;
     ParticipacaoToken public token;
 
     address public admin = makeAddr("admin");
-    address public agente = makeAddr("agente");
+    address public agent = makeAddr("agente");
     address public protocoloWallet = makeAddr("protocoloWallet");
     address public vendedor = makeAddr("vendedor");
     address public comprador = makeAddr("comprador");
 
     uint256 public constant TIMELOCK_DELAY = 1 hours;
-    uint256 public constant PRECO_POR_COTA = 100 ether;
-    uint256 public constant COTAS_INICIAIS_VENDEDOR = 50 ether;
-    uint256 public constant SALDO_INICIAL_COMPRADOR = 1_000_000 ether;
+    uint256 public constant PRICE_PER_SHARE = 100 ether;
+    uint256 public constant SELLER_INITIAL_SHARES = 50 ether;
+    uint256 public constant BUYER_INITIAL_BALANCE = 1_000_000 ether;
 
     function setUp() public {
         gateway = new EmissaoGateway(admin, TIMELOCK_DELAY);
@@ -42,25 +42,25 @@ contract LiquidacaoSecundariaReentrancyTest is Test {
         factory =
             new ParticipacaoTokenFactory(admin, address(tokenImpl), address(gateway), address(policy), TIMELOCK_DELAY);
 
-        liquidacao = new LiquidacaoSecundaria(admin, address(moeda), address(factory), protocoloWallet, TIMELOCK_DELAY);
+        settlement = new LiquidacaoSecundaria(admin, address(moeda), address(factory), protocoloWallet, TIMELOCK_DELAY);
 
-        _grantRole(address(gateway), gateway.AGENTE_ROLE(), agente);
-        _grantRole(address(factory), factory.AGENTE_ROLE(), agente);
-        _grantRole(address(policy), policy.AGENTE_ROLE(), agente);
-        _grantRole(address(liquidacao), liquidacao.AGENTE_ROLE(), agente);
+        _grantRole(address(gateway), gateway.AGENTE_ROLE(), agent);
+        _grantRole(address(factory), factory.AGENTE_ROLE(), agent);
+        _grantRole(address(policy), policy.AGENTE_ROLE(), agent);
+        _grantRole(address(settlement), settlement.AGENTE_ROLE(), agent);
 
-        vm.prank(agente);
+        vm.prank(agent);
         address tokenAddr = factory.criarOferta("Oferta X", "nX", "Empresa X", bytes32(0), "2026-A");
         token = ParticipacaoToken(tokenAddr);
 
-        vm.prank(agente);
+        vm.prank(agent);
         gateway.atestarCotas(address(token), 1_000_000 ether);
-        vm.prank(agente);
-        gateway.emitir(address(token), vendedor, COTAS_INICIAIS_VENDEDOR);
+        vm.prank(agent);
+        gateway.emitir(address(token), vendedor, SELLER_INITIAL_SHARES);
 
-        vm.prank(agente);
+        vm.prank(agent);
         policy.definirLockup(address(token), uint64(block.timestamp));
-        vm.prank(agente);
+        vm.prank(agent);
         policy.definirElegivel(address(token), comprador, true);
         vm.prank(admin);
         policy.proposeSetSecundarioLiberado(address(token), true);
@@ -68,11 +68,11 @@ contract LiquidacaoSecundariaReentrancyTest is Test {
         vm.prank(admin);
         policy.executeSetSecundarioLiberado(address(token), true);
 
-        moeda.mint(comprador, SALDO_INICIAL_COMPRADOR);
+        moeda.mint(comprador, BUYER_INITIAL_BALANCE);
         vm.prank(vendedor);
-        token.approve(address(liquidacao), type(uint256).max);
+        token.approve(address(settlement), type(uint256).max);
         vm.prank(comprador);
-        moeda.approve(address(liquidacao), type(uint256).max);
+        moeda.approve(address(settlement), type(uint256).max);
     }
 
     function _grantRole(address target, bytes32 role, address account) internal {
@@ -86,23 +86,28 @@ contract LiquidacaoSecundariaReentrancyTest is Test {
     }
 
     function test_LiquidarCessao_BlockedByReentrancyGuard() public {
-        moeda.configurarAtaque(
-            address(liquidacao),
+        moeda.armAttack(
+            address(settlement),
             abi.encodeWithSelector(
-                LiquidacaoSecundaria.liquidarCessao.selector, address(token), vendedor, comprador, 10 ether, PRECO_POR_COTA
+                LiquidacaoSecundaria.liquidarCessao.selector,
+                address(token),
+                vendedor,
+                comprador,
+                10 ether,
+                PRICE_PER_SHARE
             )
         );
 
-        vm.prank(agente);
-        liquidacao.liquidarCessao(address(token), vendedor, comprador, 10 ether, PRECO_POR_COTA);
+        vm.prank(agent);
+        settlement.liquidarCessao(address(token), vendedor, comprador, 10 ether, PRICE_PER_SHARE);
 
-        assertTrue(moeda.reentradaBloqueada());
+        assertTrue(moeda.reentryBlocked());
 
-        // A cessão original completou exatamente uma vez — sem duplo movimento de cotas nem
-        // de moeda.
+        // The original assignment completed exactly once: no double movement of shares or
+        // currency.
         assertEq(token.balanceOf(comprador), 10 ether);
-        assertEq(token.balanceOf(vendedor), COTAS_INICIAIS_VENDEDOR - 10 ether);
+        assertEq(token.balanceOf(vendedor), SELLER_INITIAL_SHARES - 10 ether);
         assertEq(moeda.balanceOf(vendedor), 1_000 ether);
-        assertEq(moeda.balanceOf(comprador), SALDO_INICIAL_COMPRADOR - 1_000 ether);
+        assertEq(moeda.balanceOf(comprador), BUYER_INITIAL_BALANCE - 1_000 ether);
     }
 }

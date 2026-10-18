@@ -13,43 +13,44 @@ import {OfertaCaptacao} from "../src/captacao/OfertaCaptacao.sol";
 import {OfertaCaptacaoFactory} from "../src/captacao/OfertaCaptacaoFactory.sol";
 import {LiquidacaoSecundaria} from "../src/secundario/LiquidacaoSecundaria.sol";
 
-/// @title DemoSecundarioSetup
-/// @notice Parte 1/3 da demo pública do secundário (Fase 4) em Sepolia. Implanta o conjunto
-/// completo atual (Fases 1-4) e PROPÕE (não executa) `AGENTE_ROLE` à própria deployer nos seis
-/// contratos que o exigem: `EmissaoGateway`, `ParticipacaoTokenFactory`,
-/// `RegistroInvestidorQualificado`, `OfertaCaptacaoFactory`, `RestrictedTransferPolicy` e
+/// @title DemoSecundarioSetup (set up the secondary market demo)
+/// @notice Part 1/3 of the public secondary-market (Phase 4) demo on Sepolia. Deploys the full
+/// current set (Phases 1-4) and PROPOSES (does not execute) `AGENTE_ROLE` to the deployer
+/// itself on the six contracts that require it: `EmissaoGateway`, `ParticipacaoTokenFactory`,
+/// `RegistroInvestidorQualificado`, `OfertaCaptacaoFactory`, `RestrictedTransferPolicy` and
 /// `LiquidacaoSecundaria`.
-/// @dev Fresh deploy de propósito: o token da demo anterior (`DEMO_SEPOLIA.md`) aponta para
-/// `DenyAllTransferPolicy` e veio de uma implementação anterior ao setter de política da Fase
-/// 3 (`ParticipacaoToken.setTransferPolicy`) — não dá para migrá-lo. Por isso implantamos o
-/// conjunto atual do zero.
+/// @dev Fresh deploy on purpose: the previous demo's token (`DEMO_SEPOLIA.md`) points at
+/// `DenyAllTransferPolicy` and came from an implementation older than the Phase 3 policy
+/// setter (`ParticipacaoToken.setTransferPolicy`), so it cannot be migrated. That is why we
+/// deploy the current set from scratch.
 ///
-/// `RestrictedTransferPolicy` recebe `AGENTE_ROLE` aqui também, além dos quatro contratos já
-/// listados na demo da Fase 2 — sem isso, `DemoSecundarioPreparar.s.sol` não consegue chamar
-/// `definirElegivel`/`definirLockup` (ambos `onlyRole(AGENTE_ROLE)`).
+/// `RestrictedTransferPolicy` also gets `AGENTE_ROLE` here, in addition to the four contracts
+/// already listed in the Phase 2 demo; without it, `DemoSecundarioPreparar.s.sol` cannot call
+/// `definirElegivel`/`definirLockup` (both `onlyRole(AGENTE_ROLE)`).
 ///
-/// Timelock (1h) atinge dois pontos nesta demo — conceder `AGENTE_ROLE` (aqui) e migrar a
-/// política do token + abrir o secundário (`DemoSecundarioPreparar.s.sol`) — e o token só
-/// existe depois do primeiro. Por isso são DUAS esperas reais de 1h, em TRÊS scripts: este
-/// propõe, `DemoSecundarioPreparar.s.sol` executa e propõe de novo, `DemoSecundario.s.sol`
-/// executa e fecha a cessão. `vm.warp` não afeta uma rede real recebendo transações reais
-/// (mesma ressalva de `DeployFase1.s.sol`/`DemoSepolia_Setup.s.sol`) — em Sepolia o tempo
-/// precisa decorrer de verdade entre propose e execute.
+/// The timelock (1h) hits two points in this demo (granting `AGENTE_ROLE` here, and migrating
+/// the token's policy + opening the secondary market in `DemoSecundarioPreparar.s.sol`), and
+/// the token only exists after the first. That is why there are TWO real 1h waits across
+/// THREE scripts: this one proposes, `DemoSecundarioPreparar.s.sol` executes and proposes
+/// again, `DemoSecundario.s.sol` executes and closes the assignment. `vm.warp` does not affect
+/// a real network receiving real transactions (same caveat as
+/// `DeployFase1.s.sol`/`DemoSepolia_Setup.s.sol`): on Sepolia the time must really pass
+/// between propose and execute.
 contract DemoSecundarioSetup is Script {
     uint256 internal constant TIMELOCK_DELAY = 1 hours;
     string internal constant OUTPUT_PATH = "./script/output/demo-secundario.json";
 
     struct Infra {
-        MockBRL moeda;
+        MockBRL currency;
         DenyAllTransferPolicy denyAll;
         RestrictedTransferPolicy restricted;
-        ParticipacaoToken tokenImplementacao;
+        ParticipacaoToken tokenImplementation;
         EmissaoGateway gateway;
         ParticipacaoTokenFactory tokenFactory;
-        RegistroInvestidorQualificado registro;
-        OfertaCaptacao captacaoImplementacao;
-        OfertaCaptacaoFactory captacaoFactory;
-        LiquidacaoSecundaria liquidacao;
+        RegistroInvestidorQualificado registry;
+        OfertaCaptacao fundraisingImplementation;
+        OfertaCaptacaoFactory fundraisingFactory;
+        LiquidacaoSecundaria settlement;
     }
 
     function run() external returns (Infra memory infra) {
@@ -64,85 +65,86 @@ contract DemoSecundarioSetup is Script {
 
         vm.startBroadcast(deployerPk);
         infra = _deployInfra(deployer, protocoloWallet);
-        _proporAgente(infra, deployer);
+        _proposeAgent(infra, deployer);
         vm.stopBroadcast();
 
-        _persistirEnderecos(infra);
-        _logResultados(infra, deployer);
+        _persistAddresses(infra);
+        _logResults(infra, deployer);
     }
 
     function _deployInfra(address admin, address protocoloWallet) internal returns (Infra memory infra) {
-        infra.moeda = new MockBRL();
+        infra.currency = new MockBRL();
         infra.denyAll = new DenyAllTransferPolicy();
         infra.restricted = new RestrictedTransferPolicy(admin, TIMELOCK_DELAY);
-        infra.tokenImplementacao = new ParticipacaoToken();
+        infra.tokenImplementation = new ParticipacaoToken();
         infra.gateway = new EmissaoGateway(admin, TIMELOCK_DELAY);
         infra.tokenFactory = new ParticipacaoTokenFactory(
-            admin, address(infra.tokenImplementacao), address(infra.gateway), address(infra.denyAll), TIMELOCK_DELAY
+            admin, address(infra.tokenImplementation), address(infra.gateway), address(infra.denyAll), TIMELOCK_DELAY
         );
-        infra.registro = new RegistroInvestidorQualificado(admin, TIMELOCK_DELAY);
-        infra.captacaoImplementacao = new OfertaCaptacao();
-        infra.captacaoFactory = new OfertaCaptacaoFactory(
+        infra.registry = new RegistroInvestidorQualificado(admin, TIMELOCK_DELAY);
+        infra.fundraisingImplementation = new OfertaCaptacao();
+        infra.fundraisingFactory = new OfertaCaptacaoFactory(
             admin,
-            address(infra.captacaoImplementacao),
+            address(infra.fundraisingImplementation),
             address(infra.gateway),
-            address(infra.registro),
-            address(infra.moeda),
+            address(infra.registry),
+            address(infra.currency),
             TIMELOCK_DELAY
         );
-        infra.liquidacao =
-            new LiquidacaoSecundaria(admin, address(infra.moeda), address(infra.tokenFactory), protocoloWallet, TIMELOCK_DELAY);
+        infra.settlement = new LiquidacaoSecundaria(
+            admin, address(infra.currency), address(infra.tokenFactory), protocoloWallet, TIMELOCK_DELAY
+        );
     }
 
-    /// @dev Propõe (não executa) AGENTE_ROLE para `agente` nos seis contratos que o exigem.
-    function _proporAgente(Infra memory infra, address agente) internal {
+    /// @dev Proposes (does not execute) AGENTE_ROLE for `agent` on the six contracts that require it.
+    function _proposeAgent(Infra memory infra, address agent) internal {
         bytes32 role = keccak256("AGENTE_ROLE");
-        address[6] memory alvos = [
+        address[6] memory targets = [
             address(infra.gateway),
             address(infra.tokenFactory),
-            address(infra.registro),
-            address(infra.captacaoFactory),
+            address(infra.registry),
+            address(infra.fundraisingFactory),
             address(infra.restricted),
-            address(infra.liquidacao)
+            address(infra.settlement)
         ];
-        for (uint256 i = 0; i < alvos.length; i++) {
-            (bool ok,) = alvos[i].call(abi.encodeWithSignature("proposeGrantRole(bytes32,address)", role, agente));
-            require(ok, "proposeGrantRole falhou");
+        for (uint256 i = 0; i < targets.length; i++) {
+            (bool ok,) = targets[i].call(abi.encodeWithSignature("proposeGrantRole(bytes32,address)", role, agent));
+            require(ok, "proposeGrantRole failed");
         }
     }
 
-    function _persistirEnderecos(Infra memory infra) internal {
+    function _persistAddresses(Infra memory infra) internal {
         string memory objKey = "infra";
-        vm.serializeAddress(objKey, "moeda", address(infra.moeda));
+        vm.serializeAddress(objKey, "moeda", address(infra.currency));
         vm.serializeAddress(objKey, "denyAll", address(infra.denyAll));
         vm.serializeAddress(objKey, "restricted", address(infra.restricted));
-        vm.serializeAddress(objKey, "tokenImplementacao", address(infra.tokenImplementacao));
+        vm.serializeAddress(objKey, "tokenImplementacao", address(infra.tokenImplementation));
         vm.serializeAddress(objKey, "gateway", address(infra.gateway));
         vm.serializeAddress(objKey, "tokenFactory", address(infra.tokenFactory));
-        vm.serializeAddress(objKey, "registro", address(infra.registro));
-        vm.serializeAddress(objKey, "captacaoImplementacao", address(infra.captacaoImplementacao));
-        vm.serializeAddress(objKey, "captacaoFactory", address(infra.captacaoFactory));
-        string memory finalJson = vm.serializeAddress(objKey, "liquidacao", address(infra.liquidacao));
+        vm.serializeAddress(objKey, "registro", address(infra.registry));
+        vm.serializeAddress(objKey, "captacaoImplementacao", address(infra.fundraisingImplementation));
+        vm.serializeAddress(objKey, "captacaoFactory", address(infra.fundraisingFactory));
+        string memory finalJson = vm.serializeAddress(objKey, "liquidacao", address(infra.settlement));
         vm.writeJson(finalJson, OUTPUT_PATH);
     }
 
-    function _logResultados(Infra memory infra, address deployer) internal view {
+    function _logResults(Infra memory infra, address deployer) internal view {
         console2.log("");
-        console2.log("== Enderecos implantados ==");
-        console2.log("MockBRL:", address(infra.moeda));
+        console2.log("== Deployed addresses ==");
+        console2.log("MockBRL:", address(infra.currency));
         console2.log("DenyAllTransferPolicy:", address(infra.denyAll));
         console2.log("RestrictedTransferPolicy:", address(infra.restricted));
-        console2.log("ParticipacaoToken (implementacao):", address(infra.tokenImplementacao));
+        console2.log("ParticipacaoToken (implementacao):", address(infra.tokenImplementation));
         console2.log("EmissaoGateway:", address(infra.gateway));
         console2.log("ParticipacaoTokenFactory:", address(infra.tokenFactory));
-        console2.log("RegistroInvestidorQualificado:", address(infra.registro));
-        console2.log("OfertaCaptacao (implementacao):", address(infra.captacaoImplementacao));
-        console2.log("OfertaCaptacaoFactory:", address(infra.captacaoFactory));
-        console2.log("LiquidacaoSecundaria:", address(infra.liquidacao));
+        console2.log("RegistroInvestidorQualificado:", address(infra.registry));
+        console2.log("OfertaCaptacao (implementacao):", address(infra.fundraisingImplementation));
+        console2.log("OfertaCaptacaoFactory:", address(infra.fundraisingFactory));
+        console2.log("LiquidacaoSecundaria:", address(infra.settlement));
         console2.log("");
-        console2.log("AGENTE_ROLE PROPOSTO (nao executado, 6 contratos) para:", deployer);
-        console2.log("Enderecos salvos em:", OUTPUT_PATH);
+        console2.log("AGENTE_ROLE PROPOSED (not executed, 6 contracts) for:", deployer);
+        console2.log("Addresses saved to:", OUTPUT_PATH);
         console2.log("");
-        console2.log(">> Espere >= 1 hora de tempo REAL, entao rode DemoSecundarioPreparar.s.sol <<");
+        console2.log(">> Wait >= 1 hour of REAL time, then run DemoSecundarioPreparar.s.sol <<");
     }
 }

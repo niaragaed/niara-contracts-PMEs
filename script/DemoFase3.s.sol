@@ -8,43 +8,43 @@ import {ParticipacaoToken} from "../src/token/ParticipacaoToken.sol";
 import {ParticipacaoTokenFactory} from "../src/token/ParticipacaoTokenFactory.sol";
 import {EmissaoGateway} from "../src/emissao/EmissaoGateway.sol";
 
-/// @title DemoFase3
-/// @notice Script de demonstração LOCAL/DRY-RUN da Fase 3: mostra o ciclo "abrir negociação
-/// após o prazo" — uma oferta nasce com `DenyAllTransferPolicy` (secundário totalmente
-/// desligado, comportamento padrão desde a Fase 1), o AGENTE prepara a `RestrictedTransferPolicy`
-/// (lock-up + allowlist) e a governança aponta o token para ela (ainda travado, porque
-/// `secundarioLiberado` começa em `false`), e só depois de decorrido o lock-up E a governança
-/// ligar a flag mestre (timelock) é que a transferência entre dois investidores elegíveis passa.
-/// Prova também os dois contra-exemplos: transferir antes da liberação/lock-up continua
-/// revertendo mesmo já apontando para a Restricted, e transferir para alguém fora da allowlist
-/// reverte mesmo com o secundário liberado.
-/// @dev NUNCA rodar com `--broadcast` contra Sepolia sem instrução explícita do usuário (ver
-/// CLAUDE.md). Mesma ressalva de `DeployFase1.s.sol`/`DeployFase2.s.sol` sobre `vm.warp`: só
-/// "pula" o atraso do timelock e o lock-up em simulação local (sem `--broadcast`) ou contra
-/// `anvil` efêmero — contra uma rede real, o tempo precisa decorrer de verdade.
+/// @title DemoFase3 (Phase 3 demo)
+/// @notice LOCAL/DRY-RUN demo script for Phase 3: shows the "open trading after the
+/// deadline" cycle. An offering starts with `DenyAllTransferPolicy` (secondary market fully
+/// off, the default behavior since Phase 1), the AGENT prepares the `RestrictedTransferPolicy`
+/// (lock-up + allowlist) and governance points the token at it (still locked, because
+/// `secundarioLiberado` starts as `false`); only after the lock-up has passed AND governance
+/// turns on the master flag (timelock) does a transfer between two eligible investors go
+/// through. It also proves the two counterexamples: transferring before the release/lock-up
+/// still reverts even when already pointing at the Restricted policy, and transferring to
+/// someone outside the allowlist reverts even with the secondary market open.
+/// @dev NEVER run with `--broadcast` against Sepolia without an explicit instruction from the
+/// user (see CLAUDE.md). Same caveat as `DeployFase1.s.sol`/`DeployFase2.s.sol` about `vm.warp`:
+/// it only "skips" the timelock delay and the lock-up in local simulation (no `--broadcast`) or
+/// against an ephemeral `anvil`; against a real network, the time must really pass.
 contract DemoFase3 is Script {
     uint256 internal constant TIMELOCK_DELAY = 1 hours;
-    uint256 internal constant COTAS_AUTORIZADAS_DEMO = 100_000 ether;
-    uint256 internal constant COTAS_INVESTIDOR1_DEMO = 1_000 ether;
-    uint256 internal constant COTAS_INVESTIDOR2_DEMO = 1_000 ether;
-    uint256 internal constant VALOR_TRANSFERIDO_DEMO = 100 ether;
-    uint256 internal constant LOCKUP_DEMO_SEGUNDOS = 7 days;
+    uint256 internal constant DEMO_AUTHORIZED_SHARES = 100_000 ether;
+    uint256 internal constant DEMO_INVESTOR1_SHARES = 1_000 ether;
+    uint256 internal constant DEMO_INVESTOR2_SHARES = 1_000 ether;
+    uint256 internal constant DEMO_TRANSFER_AMOUNT = 100 ether;
+    uint256 internal constant DEMO_LOCKUP_SECONDS = 7 days;
 
     struct Config {
         uint256 deployerPrivateKey;
-        uint256 investidor1PrivateKey;
-        uint256 investidor2PrivateKey;
+        uint256 investor1PrivateKey;
+        uint256 investor2PrivateKey;
         address admin;
-        address agente;
-        address investidor1;
-        address investidor2;
-        address naoElegivel;
+        address agent;
+        address investor1;
+        address investor2;
+        address notEligible;
     }
 
     struct Infra {
         DenyAllTransferPolicy denyAll;
         RestrictedTransferPolicy restricted;
-        ParticipacaoToken tokenImplementacao;
+        ParticipacaoToken tokenImplementation;
         EmissaoGateway gateway;
         ParticipacaoTokenFactory factory;
         address token;
@@ -56,141 +56,144 @@ contract DemoFase3 is Script {
 
         vm.startBroadcast(cfg.deployerPrivateKey);
         infra = _deployInfra(cfg);
-        _concederAgente(infra, cfg.agente);
-        _criarOfertaEEmitir(infra, cfg);
+        _grantAgent(infra, cfg.agent);
+        _createOfferingAndIssue(infra, cfg);
         vm.stopBroadcast();
 
         console2.log("");
-        console2.log("== Passo 1: secundario desligado (DenyAllTransferPolicy) ==");
-        _tentarTransferir(infra, cfg.investidor1PrivateKey, cfg.investidor2, "investidor1 -> investidor2");
+        console2.log("== Step 1: secondary market off (DenyAllTransferPolicy) ==");
+        _tryTransfer(infra, cfg.investor1PrivateKey, cfg.investor2, "investidor1 -> investidor2");
 
         vm.startBroadcast(cfg.deployerPrivateKey);
-        _prepararRestricted(infra, cfg);
-        _apontarParaRestricted(infra);
+        _prepareRestricted(infra, cfg);
+        _pointToRestricted(infra);
         vm.stopBroadcast();
 
         console2.log("");
-        console2.log("== Passo 2: ja aponta para a Restricted, mas ainda travado (liberado=false, dentro do lock-up) ==");
-        _tentarTransferir(infra, cfg.investidor1PrivateKey, cfg.investidor2, "investidor1 -> investidor2 (cedo demais)");
+        console2.log("== Step 2: already points at Restricted, but still locked (open=false, within the lock-up) ==");
+        _tryTransfer(infra, cfg.investor1PrivateKey, cfg.investor2, "investidor1 -> investidor2 (cedo demais)");
 
-        vm.warp(block.timestamp + LOCKUP_DEMO_SEGUNDOS + 1);
+        vm.warp(block.timestamp + DEMO_LOCKUP_SECONDS + 1);
 
         vm.startBroadcast(cfg.deployerPrivateKey);
-        _abrirSecundario(infra);
+        _openSecondary(infra);
         vm.stopBroadcast();
 
         console2.log("");
-        console2.log("== Passo 3: liberado e apos o lock-up, mas destinatario fora da allowlist ==");
-        _tentarTransferir(infra, cfg.investidor1PrivateKey, cfg.naoElegivel, "investidor1 -> naoElegivel");
+        console2.log("== Step 3: open and after the lock-up, but recipient outside the allowlist ==");
+        _tryTransfer(infra, cfg.investor1PrivateKey, cfg.notEligible, "investidor1 -> naoElegivel");
 
         console2.log("");
-        console2.log("== Passo 4: liberado, apos o lock-up, destinatario elegivel ==");
-        _transferirComSucesso(infra, cfg);
+        console2.log("== Step 4: open, after the lock-up, eligible recipient ==");
+        _transferSuccessfully(infra, cfg);
 
-        _logEstadoFinal(infra, cfg);
+        _logFinalState(infra, cfg);
     }
 
-    // ── Configuração ────────────────────────────────────────────────────────────────────
+    // ── Configuration ───────────────────────────────────────────────────────────────────
 
     function _readConfig() internal view returns (Config memory cfg) {
         cfg.deployerPrivateKey = vm.envOr("PRIVATE_KEY", uint256(1));
-        cfg.investidor1PrivateKey = vm.envOr("INVESTIDOR1_PRIVATE_KEY", uint256(2));
-        cfg.investidor2PrivateKey = vm.envOr("INVESTIDOR2_PRIVATE_KEY", uint256(3));
+        cfg.investor1PrivateKey = vm.envOr("INVESTIDOR1_PRIVATE_KEY", uint256(2));
+        cfg.investor2PrivateKey = vm.envOr("INVESTIDOR2_PRIVATE_KEY", uint256(3));
 
         address deployer = vm.addr(cfg.deployerPrivateKey);
         cfg.admin = vm.envOr("ADMIN_ADDRESS", deployer);
-        cfg.agente = vm.envOr("AGENTE_ADDRESS", deployer);
-        cfg.investidor1 = vm.addr(cfg.investidor1PrivateKey);
-        cfg.investidor2 = vm.addr(cfg.investidor2PrivateKey);
-        cfg.naoElegivel = vm.envOr("NAO_ELEGIVEL_ADDRESS", vm.addr(6));
+        cfg.agent = vm.envOr("AGENTE_ADDRESS", deployer);
+        cfg.investor1 = vm.addr(cfg.investor1PrivateKey);
+        cfg.investor2 = vm.addr(cfg.investor2PrivateKey);
+        cfg.notEligible = vm.envOr("NAO_ELEGIVEL_ADDRESS", vm.addr(6));
     }
 
-    // ── Deploy da infraestrutura (Fase 1, mais a Restricted da Fase 3) ─────────────────────
+    // ── Infrastructure deploy (Phase 1, plus the Phase 3 Restricted policy) ─────────────────
 
     function _deployInfra(Config memory cfg) internal returns (Infra memory infra) {
         infra.denyAll = new DenyAllTransferPolicy();
         infra.restricted = new RestrictedTransferPolicy(cfg.admin, TIMELOCK_DELAY);
-        infra.tokenImplementacao = new ParticipacaoToken();
+        infra.tokenImplementation = new ParticipacaoToken();
         infra.gateway = new EmissaoGateway(cfg.admin, TIMELOCK_DELAY);
         infra.factory = new ParticipacaoTokenFactory(
-            cfg.admin, address(infra.tokenImplementacao), address(infra.gateway), address(infra.denyAll), TIMELOCK_DELAY
+            cfg.admin,
+            address(infra.tokenImplementation),
+            address(infra.gateway),
+            address(infra.denyAll),
+            TIMELOCK_DELAY
         );
     }
 
-    /// @dev Concede AGENTE_ROLE em gateway, factory e restricted, via propose→warp→execute
-    /// (mesma ressalva de `DeployFase1`/`DeployFase2` sobre validade do `vm.warp`).
-    function _concederAgente(Infra memory infra, address agente) internal {
-        address[3] memory alvos = [address(infra.gateway), address(infra.factory), address(infra.restricted)];
+    /// @dev Grants AGENTE_ROLE on gateway, factory and restricted, via propose→warp→execute
+    /// (same caveat as `DeployFase1`/`DeployFase2` about the validity of `vm.warp`).
+    function _grantAgent(Infra memory infra, address agent) internal {
+        address[3] memory targets = [address(infra.gateway), address(infra.factory), address(infra.restricted)];
         bytes32 role = keccak256("AGENTE_ROLE");
 
-        for (uint256 i = 0; i < alvos.length; i++) {
-            (bool ok,) = alvos[i].call(abi.encodeWithSignature("proposeGrantRole(bytes32,address)", role, agente));
-            require(ok, "propose AGENTE_ROLE falhou");
+        for (uint256 i = 0; i < targets.length; i++) {
+            (bool ok,) = targets[i].call(abi.encodeWithSignature("proposeGrantRole(bytes32,address)", role, agent));
+            require(ok, "propose AGENTE_ROLE failed");
         }
 
         vm.warp(block.timestamp + TIMELOCK_DELAY);
 
-        for (uint256 i = 0; i < alvos.length; i++) {
-            (bool ok,) = alvos[i].call(abi.encodeWithSignature("executeGrantRole(bytes32,address)", role, agente));
-            require(ok, "execute AGENTE_ROLE falhou");
+        for (uint256 i = 0; i < targets.length; i++) {
+            (bool ok,) = targets[i].call(abi.encodeWithSignature("executeGrantRole(bytes32,address)", role, agent));
+            require(ok, "execute AGENTE_ROLE failed");
         }
     }
 
-    // ── Passo 0: mini-ciclo de emissão (mint via gateway, passa com qualquer política) ─────
+    // ── Step 0: issuance mini-cycle (mint via gateway, passes under any policy) ─────────────
 
-    function _criarOfertaEEmitir(Infra memory infra, Config memory cfg) internal {
-        infra.token = infra.factory.criarOferta(
-            "Oferta Demo Fase 3", "nDEMO3", "Empresa Demo Fase 3 Ltda", keccak256("cnpj-demo-fase3"), "2026-A"
-        );
+    function _createOfferingAndIssue(Infra memory infra, Config memory cfg) internal {
+        infra.token = infra.factory
+            .criarOferta(
+                "Oferta Demo Fase 3", "nDEMO3", "Empresa Demo Fase 3 Ltda", keccak256("cnpj-demo-fase3"), "2026-A"
+            );
 
-        infra.gateway.atestarCotas(infra.token, COTAS_AUTORIZADAS_DEMO);
-        infra.gateway.emitir(infra.token, cfg.investidor1, COTAS_INVESTIDOR1_DEMO);
-        infra.gateway.emitir(infra.token, cfg.investidor2, COTAS_INVESTIDOR2_DEMO);
+        infra.gateway.atestarCotas(infra.token, DEMO_AUTHORIZED_SHARES);
+        infra.gateway.emitir(infra.token, cfg.investor1, DEMO_INVESTOR1_SHARES);
+        infra.gateway.emitir(infra.token, cfg.investor2, DEMO_INVESTOR2_SHARES);
     }
 
-    // ── Passo 2: AGENTE prepara a Restricted (lock-up set-once + allowlist), governança aponta
-    // o token para ela ─────────────────────────────────────────────────────────────────────
+    // ── Step 2: the AGENT prepares the Restricted policy (set-once lock-up + allowlist), governance points
+    // the token at it ────────────────────────────────────────────────────────────────────
 
-    function _prepararRestricted(Infra memory infra, Config memory cfg) internal {
-        uint64 lockupAte = uint64(block.timestamp + LOCKUP_DEMO_SEGUNDOS);
+    function _prepareRestricted(Infra memory infra, Config memory cfg) internal {
+        uint64 lockupAte = uint64(block.timestamp + DEMO_LOCKUP_SECONDS);
         infra.restricted.definirLockup(infra.token, lockupAte);
-        infra.restricted.definirElegivel(infra.token, cfg.investidor1, true);
-        infra.restricted.definirElegivel(infra.token, cfg.investidor2, true);
-        // cfg.naoElegivel de propósito NÃO entra na allowlist — é o contra-exemplo do Passo 3.
+        infra.restricted.definirElegivel(infra.token, cfg.investor1, true);
+        infra.restricted.definirElegivel(infra.token, cfg.investor2, true);
+        // cfg.naoElegivel is deliberately NOT added to the allowlist: it is Step 3's counterexample.
     }
 
-    function _apontarParaRestricted(Infra memory infra) internal {
+    function _pointToRestricted(Infra memory infra) internal {
         infra.gateway.proposeSetTransferPolicy(infra.token, address(infra.restricted));
         vm.warp(block.timestamp + TIMELOCK_DELAY);
         infra.gateway.executeSetTransferPolicy(infra.token, address(infra.restricted));
     }
 
-    // ── Passo 4: governança liga a flag mestre (timelock) ───────────────────────────────
+    // ── Step 4: governance turns on the master flag (timelock) ────────────────────────────
 
-    function _abrirSecundario(Infra memory infra) internal {
+    function _openSecondary(Infra memory infra) internal {
         infra.restricted.proposeSetSecundarioLiberado(infra.token, true);
         vm.warp(block.timestamp + TIMELOCK_DELAY);
         infra.restricted.executeSetSecundarioLiberado(infra.token, true);
     }
 
-    // ── Transferências de demonstração ──────────────────────────────────────────────────
+    // ── Demo transfers ──────────────────────────────────────────────────────────────────
 
-    function _tentarTransferir(Infra memory infra, uint256 dePrivateKey, address para, string memory rotulo)
-        internal
-    {
-        vm.startBroadcast(dePrivateKey);
-        try ParticipacaoToken(infra.token).transfer(para, VALOR_TRANSFERIDO_DEMO) {
-            console2.log(string.concat("[INESPERADO] transferencia passou: ", rotulo));
-            revert("Fase 3: transferencia deveria ter revertido");
+    function _tryTransfer(Infra memory infra, uint256 fromPrivateKey, address to, string memory label) internal {
+        vm.startBroadcast(fromPrivateKey);
+        try ParticipacaoToken(infra.token).transfer(to, DEMO_TRANSFER_AMOUNT) {
+            console2.log(string.concat("[INESPERADO] transferencia passou: ", label));
+            revert("Phase 3: transfer should have reverted");
         } catch {
-            console2.log(string.concat("[OK] transferencia revertida como esperado: ", rotulo));
+            console2.log(string.concat("[OK] transfer reverted as expected: ", label));
         }
         vm.stopBroadcast();
     }
 
-    function _transferirComSucesso(Infra memory infra, Config memory cfg) internal {
-        vm.startBroadcast(cfg.investidor1PrivateKey);
-        ParticipacaoToken(infra.token).transfer(cfg.investidor2, VALOR_TRANSFERIDO_DEMO);
+    function _transferSuccessfully(Infra memory infra, Config memory cfg) internal {
+        vm.startBroadcast(cfg.investor1PrivateKey);
+        ParticipacaoToken(infra.token).transfer(cfg.investor2, DEMO_TRANSFER_AMOUNT);
         vm.stopBroadcast();
         console2.log("[OK] transferencia investidor1 -> investidor2 passou");
     }
@@ -200,34 +203,34 @@ contract DemoFase3 is Script {
     function _logConfig(Config memory cfg) internal pure {
         console2.log("== Configuracao ==");
         console2.log("Admin:", cfg.admin);
-        console2.log("Agente:", cfg.agente);
-        console2.log("Investidor 1 (elegivel):", cfg.investidor1);
-        console2.log("Investidor 2 (elegivel):", cfg.investidor2);
-        console2.log("Nao elegivel (contra-exemplo):", cfg.naoElegivel);
+        console2.log("Agente:", cfg.agent);
+        console2.log("Investor 1 (eligible):", cfg.investor1);
+        console2.log("Investor 2 (eligible):", cfg.investor2);
+        console2.log("Not eligible (counterexample):", cfg.notEligible);
         console2.log("Timelock delay (segundos):", TIMELOCK_DELAY);
-        console2.log("Lock-up (segundos):", LOCKUP_DEMO_SEGUNDOS);
+        console2.log("Lock-up (segundos):", DEMO_LOCKUP_SECONDS);
     }
 
-    function _logEstadoFinal(Infra memory infra, Config memory cfg) internal view {
+    function _logFinalState(Infra memory infra, Config memory cfg) internal view {
         console2.log("");
-        console2.log("== Enderecos implantados ==");
+        console2.log("== Deployed addresses ==");
         console2.log("DenyAllTransferPolicy:", address(infra.denyAll));
         console2.log("RestrictedTransferPolicy:", address(infra.restricted));
         console2.log("EmissaoGateway:", address(infra.gateway));
         console2.log("ParticipacaoTokenFactory:", address(infra.factory));
-        console2.log("Token (oferta demo):", infra.token);
+        console2.log("Token (demo offering):", infra.token);
 
         console2.log("");
-        console2.log("== Estado final da politica (RestrictedTransferPolicy) ==");
+        console2.log("== Final policy state (RestrictedTransferPolicy) ==");
         console2.log("secundarioLiberado:", infra.restricted.secundarioLiberado(infra.token));
         console2.log("lockupAte:", infra.restricted.lockupAte(infra.token));
-        console2.log("elegivel[investidor1]:", infra.restricted.elegivel(infra.token, cfg.investidor1));
-        console2.log("elegivel[investidor2]:", infra.restricted.elegivel(infra.token, cfg.investidor2));
-        console2.log("elegivel[naoElegivel]:", infra.restricted.elegivel(infra.token, cfg.naoElegivel));
+        console2.log("eligible[investor1]:", infra.restricted.elegivel(infra.token, cfg.investor1));
+        console2.log("eligible[investor2]:", infra.restricted.elegivel(infra.token, cfg.investor2));
+        console2.log("eligible[notEligible]:", infra.restricted.elegivel(infra.token, cfg.notEligible));
 
         console2.log("");
         console2.log("== Saldos finais ==");
-        console2.log("Investidor 1:", ParticipacaoToken(infra.token).balanceOf(cfg.investidor1));
-        console2.log("Investidor 2:", ParticipacaoToken(infra.token).balanceOf(cfg.investidor2));
+        console2.log("Investor 1:", ParticipacaoToken(infra.token).balanceOf(cfg.investor1));
+        console2.log("Investor 2:", ParticipacaoToken(infra.token).balanceOf(cfg.investor2));
     }
 }

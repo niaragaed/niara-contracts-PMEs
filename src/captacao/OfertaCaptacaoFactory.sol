@@ -7,38 +7,38 @@ import {TimelockedAccessControl} from "../governance/TimelockedAccessControl.sol
 import {IOfertaCaptacao} from "../interfaces/IOfertaCaptacao.sol";
 
 /// @title OfertaCaptacaoFactory
-/// @notice Cria uma captação (escrow `OfertaCaptacao` clonado via EIP-1167) por chamada,
-/// apontando o `EmissaoGateway`, o `RegistroInvestidorQualificado` e a moeda (`MockBRL`)
-/// vigentes. Mesma disciplina de clone da Fase 1 (`ParticipacaoTokenFactory`).
-/// @dev `gateway`, `registro` e `moeda` são fixados na construção — sem setter timelocked
-/// nesta fase (mesma decisão já registrada em "Pendências conhecidas" do CLAUDE.md para
-/// `ParticipacaoTokenFactory.gateway`). Só `implementacao` é trocável via timelock, e a troca
-/// só afeta captações futuras — clones já criados mantêm a lógica vigente no momento em que
-/// foram clonados (mesmo comportamento testado em
+/// @notice Creates one fundraising (an `OfertaCaptacao` escrow cloned via EIP-1167) per call,
+/// pointing at the current `EmissaoGateway`, `RegistroInvestidorQualificado` and currency
+/// (`MockBRL`). Same clone discipline as Phase 1 (`ParticipacaoTokenFactory`).
+/// @dev `gateway`, `registro` and `moeda` are fixed at construction, with no timelocked setter
+/// in this phase (the same decision already recorded in CLAUDE.md's "Known open items" for
+/// `ParticipacaoTokenFactory.gateway`). Only `implementacao` can be swapped via timelock, and
+/// the swap only affects future fundraisings; clones already created keep the logic in effect
+/// when they were cloned (same behavior tested in
 /// `ParticipacaoTokenFactoryTest.test_SetImplementacao_OnlyAffectsFutureOffers`).
 contract OfertaCaptacaoFactory is TimelockedAccessControl, Pausable {
-    /// @notice Papel operacional: agente/plataforma autorizado a criar captações e pausar a
+    /// @notice Operational role: agent/platform authorized to create fundraisings and pause the
     /// factory.
     bytes32 public constant AGENTE_ROLE = keccak256("AGENTE_ROLE");
 
     uint256 internal constant TAXA_BPS_MAXIMA = 100;
 
-    /// @notice Endereço da implementação (template) clonada em cada nova captação.
+    /// @notice Address of the implementation (template) cloned for each new fundraising.
     address public implementacao;
 
-    /// @notice `EmissaoGateway` apontado como `gateway` em todo novo clone.
+    /// @notice `EmissaoGateway` set as `gateway` on every new clone.
     address public immutable gateway;
 
-    /// @notice `RegistroInvestidorQualificado` apontado como `registro` em todo novo clone.
+    /// @notice `RegistroInvestidorQualificado` set as `registro` on every new clone.
     address public immutable registro;
 
-    /// @notice Moeda (`MockBRL`) apontada como `moeda` em todo novo clone.
+    /// @notice Currency (`MockBRL`) set as `moeda` on every new clone.
     address public immutable moeda;
 
-    /// @notice Todas as captações (escrows) já criadas, na ordem de criação.
+    /// @notice Every fundraising (escrow) created so far, in creation order.
     address[] public captacoes;
 
-    /// @notice `true` para todo endereço de captação criado por esta factory.
+    /// @notice `true` for every fundraising address created by this factory.
     mapping(address => bool) public isCaptacao;
 
     event CaptacaoCriada(
@@ -79,8 +79,8 @@ contract OfertaCaptacaoFactory is TimelockedAccessControl, Pausable {
         moeda = moeda_;
     }
 
-    /// @notice Cria uma nova captação: clona `implementacao` e a inicializa apontando
-    /// `gateway`, `registro` e `moeda` vigentes.
+    /// @notice Creates a new fundraising: clones `implementacao` and initializes it pointing at
+    /// the current `gateway`, `registro` and `moeda`.
     function criarCaptacao(
         address token,
         uint256 metaMinima,
@@ -99,22 +99,23 @@ contract OfertaCaptacaoFactory is TimelockedAccessControl, Pausable {
         if (taxaBps > TAXA_BPS_MAXIMA) revert TaxaExcedeMaximo(taxaBps, TAXA_BPS_MAXIMA);
 
         oferta = Clones.clone(implementacao);
-        IOfertaCaptacao(oferta).initialize(
-            IOfertaCaptacao.InitParams({
-                token: token,
-                gateway: gateway,
-                registro: registro,
-                moeda: moeda,
-                emissorWallet: emissorWallet,
-                protocoloWallet: protocoloWallet,
-                metaMinima: metaMinima,
-                metaMaxima: metaMaxima,
-                precoPorCota: precoPorCota,
-                prazo: prazo,
-                tetoPorInvestidor: tetoPorInvestidor,
-                taxaBps: taxaBps
-            })
-        );
+        IOfertaCaptacao(oferta)
+            .initialize(
+                IOfertaCaptacao.InitParams({
+                    token: token,
+                    gateway: gateway,
+                    registro: registro,
+                    moeda: moeda,
+                    emissorWallet: emissorWallet,
+                    protocoloWallet: protocoloWallet,
+                    metaMinima: metaMinima,
+                    metaMaxima: metaMaxima,
+                    precoPorCota: precoPorCota,
+                    prazo: prazo,
+                    tetoPorInvestidor: tetoPorInvestidor,
+                    taxaBps: taxaBps
+                })
+            );
 
         captacoes.push(oferta);
         isCaptacao[oferta] = true;
@@ -122,7 +123,7 @@ contract OfertaCaptacaoFactory is TimelockedAccessControl, Pausable {
         emit CaptacaoCriada(oferta, token, metaMinima, metaMaxima, precoPorCota, prazo);
     }
 
-    /// @notice Número total de captações já criadas.
+    /// @notice Total number of fundraisings created so far.
     function numCaptacoes() external view returns (uint256) {
         return captacoes.length;
     }
@@ -135,7 +136,7 @@ contract OfertaCaptacaoFactory is TimelockedAccessControl, Pausable {
         _unpause();
     }
 
-    // ── Troca de implementação (sujeita a timelock — afeta só captações futuras) ──────────
+    // ── Implementation swap (subject to the timelock; only affects future fundraisings) ────
 
     function proposeSetImplementacao(address novaImplementacao)
         external

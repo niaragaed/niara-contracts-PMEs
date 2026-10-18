@@ -14,18 +14,18 @@ contract EmissaoGatewayTest is Test {
     DenyAllTransferPolicy public policy;
 
     address public admin = makeAddr("admin");
-    address public agente = makeAddr("agente");
-    address public estranho = makeAddr("estranho");
+    address public agent = makeAddr("agente");
+    address public stranger = makeAddr("estranho");
     address public investidor = makeAddr("investidor");
 
     uint256 public constant TIMELOCK_DELAY = 1 hours;
     bytes32 public constant DEFAULT_ADMIN_ROLE = bytes32(0);
-    bytes32 public agenteRole;
+    bytes32 public agentRole;
 
     function setUp() public {
         gateway = new EmissaoGateway(admin, TIMELOCK_DELAY);
-        agenteRole = gateway.AGENTE_ROLE();
-        _grantRole(agenteRole, agente);
+        agentRole = gateway.AGENTE_ROLE();
+        _grantRole(agentRole, agent);
 
         policy = new DenyAllTransferPolicy();
         ParticipacaoToken implementacao = new ParticipacaoToken();
@@ -55,16 +55,16 @@ contract EmissaoGatewayTest is Test {
 
     // ── atestarCotas ────────────────────────────────────────────────────────────────────
 
-    function test_AtestarCotas_OnlyAgente() public {
-        vm.prank(estranho);
+    function test_AtestarCotas_OnlyAgent() public {
+        vm.prank(stranger);
         vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, estranho, agenteRole)
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, agentRole)
         );
         gateway.atestarCotas(address(token), 1_000 ether);
     }
 
     function test_AtestarCotas_UpdatesTokenCap() public {
-        vm.prank(agente);
+        vm.prank(agent);
         gateway.atestarCotas(address(token), 1_000 ether);
         assertEq(token.cotasAutorizadas(), 1_000 ether);
     }
@@ -72,38 +72,38 @@ contract EmissaoGatewayTest is Test {
     function test_AtestarCotas_EmitsEvent() public {
         vm.expectEmit(true, true, true, true, address(gateway));
         emit EmissaoGateway.CotasAtestadas(address(token), 1_000 ether);
-        vm.prank(agente);
+        vm.prank(agent);
         gateway.atestarCotas(address(token), 1_000 ether);
     }
 
     // ── emitir ──────────────────────────────────────────────────────────────────────────
 
-    function test_Emitir_OnlyAgente() public {
-        vm.prank(agente);
+    function test_Emitir_OnlyAgent() public {
+        vm.prank(agent);
         gateway.atestarCotas(address(token), 1_000 ether);
 
-        vm.prank(estranho);
+        vm.prank(stranger);
         vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, estranho, agenteRole)
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, agentRole)
         );
         gateway.emitir(address(token), investidor, 100 ether);
     }
 
-    function test_Emitir_MintsToInvestidor() public {
-        vm.prank(agente);
+    function test_Emitir_MintsToInvestor() public {
+        vm.prank(agent);
         gateway.atestarCotas(address(token), 1_000 ether);
 
-        vm.prank(agente);
+        vm.prank(agent);
         gateway.emitir(address(token), investidor, 100 ether);
 
         assertEq(token.balanceOf(investidor), 100 ether);
     }
 
     function test_Emitir_RevertsBeyondAttestedCap() public {
-        vm.prank(agente);
+        vm.prank(agent);
         gateway.atestarCotas(address(token), 100 ether);
 
-        vm.prank(agente);
+        vm.prank(agent);
         vm.expectRevert(
             abi.encodeWithSelector(ParticipacaoToken.MintExcedeCotasAutorizadas.selector, 101 ether, 100 ether)
         );
@@ -112,98 +112,98 @@ contract EmissaoGatewayTest is Test {
 
     // ── pausarToken / despausarToken ────────────────────────────────────────────────────
 
-    function test_PausarToken_OnlyAgente() public {
-        vm.prank(estranho);
+    function test_PausarToken_OnlyAgent() public {
+        vm.prank(stranger);
         vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, estranho, agenteRole)
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, agentRole)
         );
         gateway.pausarToken(address(token));
     }
 
     function test_PausarToken_PausesToken() public {
-        vm.prank(agente);
+        vm.prank(agent);
         gateway.pausarToken(address(token));
         assertTrue(token.paused());
     }
 
     function test_DespausarToken_UnpausesToken() public {
-        vm.prank(agente);
+        vm.prank(agent);
         gateway.pausarToken(address(token));
 
-        vm.prank(agente);
+        vm.prank(agent);
         gateway.despausarToken(address(token));
         assertFalse(token.paused());
     }
 
     // ── registrarCaptacao ───────────────────────────────────────────────────────────────
 
-    address public captacaoFake = makeAddr("captacaoFake");
+    address public fakeFundraising = makeAddr("captacaoFake");
 
-    function test_RegistrarCaptacao_OnlyAgente() public {
-        vm.prank(estranho);
+    function test_RegistrarCaptacao_OnlyAgent() public {
+        vm.prank(stranger);
         vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, estranho, agenteRole)
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, agentRole)
         );
-        gateway.registrarCaptacao(address(token), captacaoFake);
+        gateway.registrarCaptacao(address(token), fakeFundraising);
     }
 
     function test_RegistrarCaptacao_SetsAuthorizedCaptacao() public {
-        vm.prank(agente);
-        gateway.registrarCaptacao(address(token), captacaoFake);
-        assertEq(gateway.ofertaCaptacaoAutorizada(address(token)), captacaoFake);
+        vm.prank(agent);
+        gateway.registrarCaptacao(address(token), fakeFundraising);
+        assertEq(gateway.ofertaCaptacaoAutorizada(address(token)), fakeFundraising);
     }
 
     function test_RegistrarCaptacao_EmitsEvent() public {
         vm.expectEmit(true, true, true, true, address(gateway));
-        emit EmissaoGateway.CaptacaoRegistrada(address(token), captacaoFake);
-        vm.prank(agente);
-        gateway.registrarCaptacao(address(token), captacaoFake);
+        emit EmissaoGateway.CaptacaoRegistrada(address(token), fakeFundraising);
+        vm.prank(agent);
+        gateway.registrarCaptacao(address(token), fakeFundraising);
     }
 
     function test_RegistrarCaptacao_CanRevokeWithZeroAddress() public {
-        vm.prank(agente);
-        gateway.registrarCaptacao(address(token), captacaoFake);
+        vm.prank(agent);
+        gateway.registrarCaptacao(address(token), fakeFundraising);
 
-        vm.prank(agente);
+        vm.prank(agent);
         gateway.registrarCaptacao(address(token), address(0));
         assertEq(gateway.ofertaCaptacaoAutorizada(address(token)), address(0));
     }
 
     // ── emitirParaCaptacao ──────────────────────────────────────────────────────────────
 
-    function test_EmitirParaCaptacao_OnlyAuthorizedCaptacao() public {
-        vm.prank(agente);
+    function test_EmitirParaCaptacao_OnlyAuthorizedFundraising() public {
+        vm.prank(agent);
         gateway.atestarCotas(address(token), 1_000 ether);
 
-        vm.prank(agente);
-        gateway.registrarCaptacao(address(token), captacaoFake);
+        vm.prank(agent);
+        gateway.registrarCaptacao(address(token), fakeFundraising);
 
-        vm.prank(estranho);
+        vm.prank(stranger);
         vm.expectRevert(EmissaoGateway.NaoAutorizado.selector);
         gateway.emitirParaCaptacao(address(token), investidor, 100 ether);
     }
 
-    function test_EmitirParaCaptacao_MintsToInvestidor() public {
-        vm.prank(agente);
+    function test_EmitirParaCaptacao_MintsToInvestor() public {
+        vm.prank(agent);
         gateway.atestarCotas(address(token), 1_000 ether);
 
-        vm.prank(agente);
-        gateway.registrarCaptacao(address(token), captacaoFake);
+        vm.prank(agent);
+        gateway.registrarCaptacao(address(token), fakeFundraising);
 
-        vm.prank(captacaoFake);
+        vm.prank(fakeFundraising);
         gateway.emitirParaCaptacao(address(token), investidor, 100 ether);
 
         assertEq(token.balanceOf(investidor), 100 ether);
     }
 
     function test_EmitirParaCaptacao_RevertsBeyondAttestedCap() public {
-        vm.prank(agente);
+        vm.prank(agent);
         gateway.atestarCotas(address(token), 100 ether);
 
-        vm.prank(agente);
-        gateway.registrarCaptacao(address(token), captacaoFake);
+        vm.prank(agent);
+        gateway.registrarCaptacao(address(token), fakeFundraising);
 
-        vm.prank(captacaoFake);
+        vm.prank(fakeFundraising);
         vm.expectRevert(
             abi.encodeWithSelector(ParticipacaoToken.MintExcedeCotasAutorizadas.selector, 101 ether, 100 ether)
         );
@@ -211,27 +211,27 @@ contract EmissaoGatewayTest is Test {
     }
 
     function test_EmitirParaCaptacao_EmitsEvent() public {
-        vm.prank(agente);
+        vm.prank(agent);
         gateway.atestarCotas(address(token), 1_000 ether);
-        vm.prank(agente);
-        gateway.registrarCaptacao(address(token), captacaoFake);
+        vm.prank(agent);
+        gateway.registrarCaptacao(address(token), fakeFundraising);
 
         vm.expectEmit(true, true, true, true, address(gateway));
         emit EmissaoGateway.CotasEmitidasViaCaptacao(address(token), investidor, 100 ether);
-        vm.prank(captacaoFake);
+        vm.prank(fakeFundraising);
         gateway.emitirParaCaptacao(address(token), investidor, 100 ether);
     }
 
-    function test_EmitirParaCaptacao_RevertsWhenNoCaptacaoRegistered() public {
-        vm.prank(agente);
+    function test_EmitirParaCaptacao_RevertsWhenNoFundraisingRegistered() public {
+        vm.prank(agent);
         gateway.atestarCotas(address(token), 1_000 ether);
 
-        vm.prank(captacaoFake);
+        vm.prank(fakeFundraising);
         vm.expectRevert(EmissaoGateway.NaoAutorizado.selector);
         gateway.emitirParaCaptacao(address(token), investidor, 100 ether);
     }
 
-    // ── Troca de política de transferência via timelock (Fase 3) ──────────────────────────
+    // ── Transfer policy change via timelock (Phase 3) ───────────────────────────────────
 
     function test_SetTransferPolicy_RequiresTimelock() public {
         DenyAllTransferPolicy novaPolitica = new DenyAllTransferPolicy();
@@ -252,9 +252,11 @@ contract EmissaoGatewayTest is Test {
 
     function test_SetTransferPolicy_OnlyAdminCanPropose() public {
         DenyAllTransferPolicy novaPolitica = new DenyAllTransferPolicy();
-        vm.prank(estranho);
+        vm.prank(stranger);
         vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, estranho, DEFAULT_ADMIN_ROLE)
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, DEFAULT_ADMIN_ROLE
+            )
         );
         gateway.proposeSetTransferPolicy(address(token), address(novaPolitica));
     }

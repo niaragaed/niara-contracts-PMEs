@@ -7,76 +7,76 @@ import {ParticipacaoToken} from "../../src/token/ParticipacaoToken.sol";
 import {EmissaoGateway} from "../../src/emissao/EmissaoGateway.sol";
 import {RestrictedTransferPolicy} from "../../src/policies/RestrictedTransferPolicy.sol";
 
-/// @notice Ator de fuzzing stateful do domínio da política restrita (Fase 3): cria tokens já
-/// apontando para `RestrictedTransferPolicy`, minta saldo inicial via `gateway.emitir`, e expõe
-/// uma ação por peça da tabela-verdade de `canTransfer` (definir elegibilidade, definir
-/// lock-up, abrir o secundário, tentar transferir) mais tentativas deliberadas de burlar
-/// guardas (`tentar*`). Mesmo desenho de `test/invariant/Handler.sol`/`HandlerCaptacao.sol` (ver
-/// Linhagem no CLAUDE.md): a maioria das chamadas usa parâmetros válidos; as `tentar*` tomam de
-/// propósito o caminho inválido, sem try/catch — só viram "ghost" `true` quando uma chamada que
-/// DEVERIA reverter termina sem reverter.
+/// @notice Stateful fuzzing actor for the restricted-policy domain (Phase 3): creates tokens
+/// already pointing at `RestrictedTransferPolicy`, mints an initial balance via `gateway.emitir`,
+/// and exposes one action per piece of the `canTransfer` truth table (set eligibility, set
+/// lock-up, open the secondary market, try to transfer) plus deliberate attempts to bypass
+/// guards (`tentar*`). Same design as `test/invariant/Handler.sol`/`HandlerCaptacao.sol` (see
+/// Lineage in CLAUDE.md): most calls use valid parameters; the `tentar*` ones take the invalid
+/// path on purpose, without try/catch, and only flip a "ghost" to `true` when a call that
+/// SHOULD revert ends without reverting.
 ///
-/// `ghost_*Esperado` espelham, em memória do handler, o estado que o handler mesmo escreveu na
-/// política — comparados pelo InvariantPoliticaTest contra os getters reais da política a cada
-/// invariante. Como cada mapping da política é keyed por `token`, essa comparação prova
-/// isolamento entre tokens "de graça": se uma escrita em `tokenA` vazasse para `tokenB`, o
-/// espelho de `tokenB` divergiria do real.
+/// `ghost_*Esperado` mirror, in the handler's memory, the state the handler itself wrote to
+/// the policy; InvariantPoliticaTest compares them against the policy's real getters on every
+/// invariant. Since each of the policy's mappings is keyed by `token`, that comparison proves
+/// isolation between tokens "for free": if a write to `tokenA` leaked into `tokenB`, `tokenB`'s
+/// mirror would diverge from the real state.
 contract HandlerPolitica is Test {
     EmissaoGateway public gateway;
     RestrictedTransferPolicy public policy;
-    ParticipacaoToken public tokenImplementacao;
+    ParticipacaoToken public tokenImplementation;
 
     address public admin;
-    address public agente;
+    address public agent;
     address[] public actors;
 
     address[] public tokens;
 
-    mapping(address => bool) public ghost_secundarioLiberadoEsperado;
-    mapping(address => uint64) public ghost_lockupAteEsperado;
-    mapping(address => mapping(address => bool)) public ghost_elegivelEsperado;
+    mapping(address => bool) public ghost_expectedSecondaryOpen;
+    mapping(address => uint64) public ghost_expectedLockupUntil;
+    mapping(address => mapping(address => bool)) public ghost_expectedEligible;
 
-    /// @notice Vira `true` se uma transferência titular→titular tiver um resultado
-    /// (sucesso/revert) diferente do previsto pela tabela-verdade (secundarioLiberado &&
-    /// !lockup && elegivel[to]) — é a prova central da Fase 3.
+    /// @notice Becomes `true` if a holder→holder transfer has a result (success/revert)
+    /// different from what the truth table predicts (secundarioLiberado && !lockup &&
+    /// elegivel[to]): the core proof of Phase 3.
     bool public ghost_truthTableViolated;
 
-    /// @notice Vira `true` se `definirElegivel`/`definirLockup` forem bem-sucedidos chamados
-    /// por alguém sem `AGENTE_ROLE`.
+    /// @notice Becomes `true` if `definirElegivel`/`definirLockup` succeed when called by someone
+    /// without `AGENTE_ROLE`.
     bool public ghost_unauthorizedOperationalCallSucceeded;
 
-    /// @notice Vira `true` se `proposeSetSecundarioLiberado` for bem-sucedido chamado por
-    /// alguém sem `DEFAULT_ADMIN_ROLE`.
-    bool public ghost_unauthorizedSecundarioToggleSucceeded;
+    /// @notice Becomes `true` if `proposeSetSecundarioLiberado` succeeds when called by someone
+    /// without `DEFAULT_ADMIN_ROLE`.
+    bool public ghost_unauthorizedSecondaryToggleSucceeded;
 
-    /// @notice Vira `true` se um segundo `definirLockup` no mesmo token for bem-sucedido
-    /// (violaria "set-once").
+    /// @notice Becomes `true` if a second `definirLockup` on the same token succeeds
+    /// (it would violate "set-once").
     bool public ghost_doubleLockupSucceeded;
 
-    /// @notice Vira `true` se `gateway.emitir` (mint, dentro do teto atestado) reverter só por
-    /// causa do estado da `RestrictedTransferPolicy` anexada — mint nunca deveria consultar a
-    /// política (ver `ParticipacaoToken._update`, `from == address(0)`).
+    /// @notice Becomes `true` if `gateway.emitir` (mint, within the attested cap) reverts only
+    /// because of the attached `RestrictedTransferPolicy`'s state; mint should never read the
+    /// policy (see `ParticipacaoToken._update`, `from == address(0)`).
     bool public ghost_mintFailedUnexpectedly;
 
     struct Config {
         EmissaoGateway gateway;
         RestrictedTransferPolicy policy;
-        ParticipacaoToken tokenImplementacao;
+        ParticipacaoToken tokenImplementation;
         address admin;
-        address agente;
+        address agent;
         address[] actors;
     }
 
     constructor(Config memory config) {
         gateway = config.gateway;
         policy = config.policy;
-        tokenImplementacao = config.tokenImplementacao;
+        tokenImplementation = config.tokenImplementation;
         admin = config.admin;
-        agente = config.agente;
+        agent = config.agent;
         actors = config.actors;
     }
 
-    // ── Helpers de seleção ─────────────────────────────────────────────────────────────
+    // ── Selection helpers ──────────────────────────────────────────────────────────────
 
     function _actorAt(uint256 seed) internal view returns (address) {
         return actors[seed % actors.length];
@@ -90,32 +90,39 @@ contract HandlerPolitica is Test {
         return seed % 5 == 0;
     }
 
-    // ── Criação de tokens já com a Restricted anexada ──────────────────────────────────
+    // ── Creating tokens with the Restricted policy already attached ───────────────────
 
-    function criarToken(uint256 seed) external {
-        address clone = Clones.clone(address(tokenImplementacao));
-        ParticipacaoToken(clone).initialize(
-            "Oferta Politica", "nPOL", address(gateway), address(policy), "Empresa Politica", bytes32(0), vm.toString(seed)
-        );
+    function createToken(uint256 seed) external {
+        address clone = Clones.clone(address(tokenImplementation));
+        ParticipacaoToken(clone)
+            .initialize(
+                "Oferta Politica",
+                "nPOL",
+                address(gateway),
+                address(policy),
+                "Empresa Politica",
+                bytes32(0),
+                vm.toString(seed)
+            );
 
-        vm.prank(agente);
+        vm.prank(agent);
         gateway.atestarCotas(clone, 1_000_000 ether);
 
         tokens.push(clone);
     }
 
-    // ── Mint (deve sempre passar, independente do estado da política) ─────────────────
+    // ── Mint (must always pass, regardless of the policy's state) ─────────────────────
 
-    function mintar(uint256 tokenSeed, uint256 toSeed, uint256 amountSeed) external {
+    function mintShares(uint256 tokenSeed, uint256 toSeed, uint256 amountSeed) external {
         if (tokens.length == 0) return;
         address token = _pickToken(tokenSeed);
         address to = _actorAt(toSeed);
 
-        uint256 restante = ParticipacaoToken(token).cotasAutorizadas() - ParticipacaoToken(token).totalSupply();
-        if (restante == 0) return;
-        uint256 amount = bound(amountSeed, 1, restante);
+        uint256 remaining = ParticipacaoToken(token).cotasAutorizadas() - ParticipacaoToken(token).totalSupply();
+        if (remaining == 0) return;
+        uint256 amount = bound(amountSeed, 1, remaining);
 
-        vm.prank(agente);
+        vm.prank(agent);
         try gateway.emitir(token, to, amount) {}
         catch {
             ghost_mintFailedUnexpectedly = true;
@@ -124,20 +131,20 @@ contract HandlerPolitica is Test {
 
     // ── Elegibilidade (operacional, AGENTE) ────────────────────────────────────────────
 
-    function definirElegivel(uint256 tokenSeed, uint256 investidorSeed, uint256 flagSeed, uint256 chaosSeed) external {
+    function definirElegivel(uint256 tokenSeed, uint256 investorSeed, uint256 flagSeed, uint256 chaosSeed) external {
         if (tokens.length == 0) return;
         address token = _pickToken(tokenSeed);
-        address investidor = _actorAt(investidorSeed);
+        address investidor = _actorAt(investorSeed);
         bool estaElegivel = flagSeed % 2 == 0;
         bool chaos = _chaos(chaosSeed);
-        address caller = chaos ? _actorAt(chaosSeed) : agente;
+        address caller = chaos ? _actorAt(chaosSeed) : agent;
 
         vm.prank(caller);
         try policy.definirElegivel(token, investidor, estaElegivel) {
-            if (caller != agente) {
+            if (caller != agent) {
                 ghost_unauthorizedOperationalCallSucceeded = true;
             } else {
-                ghost_elegivelEsperado[token][investidor] = estaElegivel;
+                ghost_expectedEligible[token][investidor] = estaElegivel;
             }
         } catch {}
     }
@@ -148,35 +155,35 @@ contract HandlerPolitica is Test {
         if (tokens.length == 0) return;
         address token = _pickToken(tokenSeed);
         bool chaos = _chaos(chaosSeed);
-        address caller = chaos ? _actorAt(chaosSeed) : agente;
+        address caller = chaos ? _actorAt(chaosSeed) : agent;
         uint64 novoLockupAte = uint64(block.timestamp + bound(lockupSeed, 0, 60 days));
 
         vm.prank(caller);
         try policy.definirLockup(token, novoLockupAte) {
-            if (caller != agente) {
+            if (caller != agent) {
                 ghost_unauthorizedOperationalCallSucceeded = true;
             } else {
-                ghost_lockupAteEsperado[token] = novoLockupAte;
+                ghost_expectedLockupUntil[token] = novoLockupAte;
             }
         } catch {}
     }
 
-    function tentarLockupDuplicado(uint256 tokenSeed, uint256 lockupSeed) external {
+    function tryDuplicateLockup(uint256 tokenSeed, uint256 lockupSeed) external {
         if (tokens.length == 0) return;
         address token = _pickToken(tokenSeed);
         if (!policy.lockupDefinido(token)) return;
 
-        vm.prank(agente);
+        vm.prank(agent);
         policy.definirLockup(token, uint64(block.timestamp + bound(lockupSeed, 0, 60 days)));
 
-        // Só chega aqui se NÃO reverteu — "set-once" foi violado.
+        // Only reaches here if it did NOT revert: "set-once" was violated.
         ghost_doubleLockupSucceeded = true;
     }
 
-    // ── Flag mestre (governado por timelock — tratado como uma ação atômica do ponto de
-    // vista do fuzzer, mesmo espírito de `_grantRoleOn` nos outros testes de invariante) ──
+    // ── Master flag (governed by timelock, treated as an atomic action from the fuzzer's
+    // point of view, in the same spirit as `_grantRoleOn` in the other invariant tests) ──
 
-    function abrirSecundario(uint256 tokenSeed, uint256 chaosSeed) external {
+    function openSecondary(uint256 tokenSeed, uint256 chaosSeed) external {
         if (tokens.length == 0) return;
         address token = _pickToken(tokenSeed);
         bool chaos = _chaos(chaosSeed);
@@ -185,46 +192,46 @@ contract HandlerPolitica is Test {
         vm.prank(caller);
         try policy.proposeSetSecundarioLiberado(token, true) returns (uint256 executeAfter) {
             if (caller != admin) {
-                ghost_unauthorizedSecundarioToggleSucceeded = true;
+                ghost_unauthorizedSecondaryToggleSucceeded = true;
                 return;
             }
             vm.warp(executeAfter);
             vm.prank(admin);
             policy.executeSetSecundarioLiberado(token, true);
-            ghost_secundarioLiberadoEsperado[token] = true;
+            ghost_expectedSecondaryOpen[token] = true;
         } catch {}
     }
 
     // ── Tempo ───────────────────────────────────────────────────────────────────────────
 
-    function avancarTempo(uint256 seed) external {
+    function advanceTime(uint256 seed) external {
         vm.warp(block.timestamp + bound(seed, 1, 40 days));
     }
 
-    // ── Tentativas de transferência: o coração da tabela-verdade ──────────────────────────
+    // ── Transfer attempts: the heart of the truth table ──────────────────────────────────
 
-    function tentarTransferir(uint256 tokenSeed, uint256 fromSeed, uint256 toSeed, uint256 amountSeed) external {
+    function tryTransfer(uint256 tokenSeed, uint256 fromSeed, uint256 toSeed, uint256 amountSeed) external {
         if (tokens.length == 0) return;
         address token = _pickToken(tokenSeed);
         address from = _actorAt(fromSeed);
-        uint256 saldo = ParticipacaoToken(token).balanceOf(from);
-        if (saldo == 0) return;
+        uint256 balance = ParticipacaoToken(token).balanceOf(from);
+        if (balance == 0) return;
         uint256 idx = toSeed % actors.length;
         address to = actors[idx] == from ? actors[(idx + 1) % actors.length] : actors[idx];
-        uint256 amount = bound(amountSeed, 1, saldo);
+        uint256 amount = bound(amountSeed, 1, balance);
 
-        bool deveriaPassar = policy.secundarioLiberado(token) && block.timestamp >= policy.lockupAte(token)
+        bool shouldPass = policy.secundarioLiberado(token) && block.timestamp >= policy.lockupAte(token)
             && policy.elegivel(token, to);
 
         vm.prank(from);
         try ParticipacaoToken(token).transfer(to, amount) returns (bool) {
-            if (!deveriaPassar) ghost_truthTableViolated = true;
+            if (!shouldPass) ghost_truthTableViolated = true;
         } catch {
-            if (deveriaPassar) ghost_truthTableViolated = true;
+            if (shouldPass) ghost_truthTableViolated = true;
         }
     }
 
-    // ── Views para o InvariantPoliticaTest ─────────────────────────────────────────────
+    // ── Views for InvariantPoliticaTest ────────────────────────────────────────────────
 
     function numTokens() external view returns (uint256) {
         return tokens.length;

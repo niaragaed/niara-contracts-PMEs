@@ -6,51 +6,50 @@ import {ParticipacaoTokenFactory} from "../../src/token/ParticipacaoTokenFactory
 import {ParticipacaoToken} from "../../src/token/ParticipacaoToken.sol";
 import {EmissaoGateway} from "../../src/emissao/EmissaoGateway.sol";
 
-/// @notice Ator de fuzzing stateful: expõe uma ação por função pública (criar oferta, atestar,
-/// emitir, tentar transferir, tentar burlar `onlyGateway`/`AGENTE_ROLE`/inicialização dupla,
-/// pausas) para que o motor de invariantes do Foundry explore sequências aleatórias desses
-/// passos.
-/// @dev Espelha o desenho de `niara-contracts/test/invariant/Handler.sol` (ver Linhagem no
-/// CLAUDE.md): a maior parte das chamadas usa parâmetros limitados (`bound`) a estados
-/// válidos; uma fração (`_chaos`, ~1 em 5) toma deliberadamente o caminho inválido. Chamadas
-/// externas não são envolvidas em try/catch — com `fail_on_revert = false` (ver
-/// foundry.toml), um revert genuíno é tolerado pelo runner e desfaz atomicamente qualquer
-/// efeito colateral desta chamada, inclusive as variáveis "ghost" abaixo. Um "ghost" só vira
-/// `true` quando uma chamada que DEVERIA reverter (violação de acesso, dupla inicialização,
-/// transferência proibida) termina sem reverter — ou seja, quando a invariante correspondente
-/// foi de fato quebrada.
+/// @notice Stateful fuzzing actor: exposes one action per public function (create offering,
+/// attest, issue, try to transfer, try to bypass `onlyGateway`/`AGENTE_ROLE`/double
+/// initialization, pauses) so Foundry's invariant engine explores random sequences of these
+/// steps.
+/// @dev Mirrors the design of `niara-contracts/test/invariant/Handler.sol` (see Lineage in
+/// CLAUDE.md): most calls use parameters bounded (`bound`) to valid states; a fraction
+/// (`_chaos`, ~1 in 5) deliberately takes the invalid path. External calls are not wrapped in
+/// try/catch: with `fail_on_revert = false` (see foundry.toml), a genuine revert is tolerated
+/// by the runner and atomically undoes any side effect of this call, including the "ghost"
+/// variables below. A "ghost" only becomes `true` when a call that SHOULD revert (access
+/// violation, double initialization, forbidden transfer) ends without reverting, i.e. when the
+/// corresponding invariant was actually broken.
 contract Handler is Test {
     ParticipacaoTokenFactory public factory;
     EmissaoGateway public gateway;
 
     address public admin;
-    address public agente;
+    address public agent;
     address[] public actors;
 
     address[] public tokens;
 
-    /// @notice Vira `true` se `mint`/`setCotasAutorizadas`/`pause`/`unpause` do token forem
-    /// chamados com sucesso por alguém diferente do `gateway` configurado.
+    /// @notice Becomes `true` if the token's `mint`/`setCotasAutorizadas`/`pause`/`unpause` are
+    /// called successfully by anyone other than the configured `gateway`.
     bool public ghost_unauthorizedTokenCallSucceeded;
 
-    /// @notice Vira `true` se `atestarCotas`/`emitir`/`pausarToken`/`despausarToken` do
-    /// gateway, ou `criarOferta` da factory, forem chamados com sucesso por alguém sem
-    /// `AGENTE_ROLE`.
+    /// @notice Becomes `true` if the gateway's `atestarCotas`/`emitir`/`pausarToken`/
+    /// `despausarToken`, or the factory's `criarOferta`, are called successfully by someone
+    /// without `AGENTE_ROLE`.
     bool public ghost_unauthorizedRoleCallSucceeded;
 
-    /// @notice Vira `true` se alguma transferência titular→titular (`transfer`/`transferFrom`)
-    /// for bem-sucedida — a política `DenyAllTransferPolicy` deveria negar sempre.
+    /// @notice Becomes `true` if any holder→holder transfer (`transfer`/`transferFrom`)
+    /// succeeds; the `DenyAllTransferPolicy` should always deny.
     bool public ghost_transferSucceeded;
 
-    /// @notice Vira `true` se `initialize` puder ser chamado uma segunda vez em um clone já
-    /// inicializado.
+    /// @notice Becomes `true` if `initialize` can be called a second time on an already
+    /// initialized clone.
     bool public ghost_reinitializeSucceeded;
 
     struct Config {
         ParticipacaoTokenFactory factory;
         EmissaoGateway gateway;
         address admin;
-        address agente;
+        address agent;
         address[] actors;
     }
 
@@ -58,11 +57,11 @@ contract Handler is Test {
         factory = config.factory;
         gateway = config.gateway;
         admin = config.admin;
-        agente = config.agente;
+        agent = config.agent;
         actors = config.actors;
     }
 
-    // ── Helpers de seleção ─────────────────────────────────────────────────────────────
+    // ── Selection helpers ──────────────────────────────────────────────────────────────
 
     function _actorAt(uint256 seed) internal view returns (address) {
         return actors[seed % actors.length];
@@ -81,15 +80,15 @@ contract Handler is Test {
         return ParticipacaoToken(tokens[seed % tokens.length]);
     }
 
-    /// @dev ~1 em 5 chamadas toma o caminho "caótico" (inválido de propósito).
+    /// @dev ~1 in 5 calls takes the "chaotic" path (invalid on purpose).
     function _chaos(uint256 seed) internal pure returns (bool) {
         return seed % 5 == 0;
     }
 
-    // ── Criação de ofertas ──────────────────────────────────────────────────────────────
+    // ── Offering creation ───────────────────────────────────────────────────────────────
 
     function criarOferta(uint256 seed, uint256 chaosSeed) external {
-        address caller = _chaos(chaosSeed) ? _actorAt(chaosSeed) : agente;
+        address caller = _chaos(chaosSeed) ? _actorAt(chaosSeed) : agent;
 
         string memory nome = string(abi.encodePacked("Oferta ", vm.toString(seed)));
         string memory simbolo = string(abi.encodePacked("nOF", vm.toString(seed % 1000)));
@@ -101,24 +100,25 @@ contract Handler is Test {
         address token = factory.criarOferta(nome, simbolo, empresa, cnpjRef, serie);
         tokens.push(token);
 
-        if (caller != agente) ghost_unauthorizedRoleCallSucceeded = true;
+        if (caller != agent) ghost_unauthorizedRoleCallSucceeded = true;
     }
 
-    // ── Atestação e emissão ─────────────────────────────────────────────────────────────
+    // ── Attestation and issuance ────────────────────────────────────────────────────────
 
-    function atestarCotas(uint256 tokenSeed, uint256 novoTetoSeed, uint256 chaosSeed) external {
+    function atestarCotas(uint256 tokenSeed, uint256 newCapSeed, uint256 chaosSeed) external {
         if (tokens.length == 0) return;
         ParticipacaoToken token = _pickToken(tokenSeed);
         uint256 atual = token.cotasAutorizadas();
 
         bool chaos = _chaos(chaosSeed);
-        uint256 novoTeto = chaos ? novoTetoSeed % (atual == 0 ? 1 : atual) : bound(novoTetoSeed, atual, atual + 1_000_000 ether);
-        address caller = chaos && chaosSeed % 2 == 0 ? _actorAt(chaosSeed) : agente;
+        uint256 novoTeto =
+            chaos ? newCapSeed % (atual == 0 ? 1 : atual) : bound(newCapSeed, atual, atual + 1_000_000 ether);
+        address caller = chaos && chaosSeed % 2 == 0 ? _actorAt(chaosSeed) : agent;
 
         vm.prank(caller);
         gateway.atestarCotas(address(token), novoTeto);
 
-        if (caller != agente) ghost_unauthorizedRoleCallSucceeded = true;
+        if (caller != agent) ghost_unauthorizedRoleCallSucceeded = true;
     }
 
     function emitir(uint256 tokenSeed, uint256 toSeed, uint256 amountSeed, uint256 chaosSeed) external {
@@ -126,85 +126,85 @@ contract Handler is Test {
         ParticipacaoToken token = _pickToken(tokenSeed);
         address to = _actorAt(toSeed);
 
-        uint256 restante = token.cotasAutorizadas() - token.totalSupply();
+        uint256 remaining = token.cotasAutorizadas() - token.totalSupply();
         bool chaos = _chaos(chaosSeed);
 
         uint256 amount;
         if (chaos) {
-            amount = amountSeed % (2 * (restante == 0 ? 1 ether : restante) + 1); // pode exceder o restante, incl. zero.
+            amount = amountSeed % (2 * (remaining == 0 ? 1 ether : remaining) + 1); // may exceed the remainder, including zero.
         } else {
-            if (restante == 0) return;
-            amount = bound(amountSeed, 1, restante);
+            if (remaining == 0) return;
+            amount = bound(amountSeed, 1, remaining);
         }
 
-        address caller = chaos && chaosSeed % 2 == 0 ? _actorAt(chaosSeed) : agente;
+        address caller = chaos && chaosSeed % 2 == 0 ? _actorAt(chaosSeed) : agent;
 
         vm.prank(caller);
         gateway.emitir(address(token), to, amount);
 
-        if (caller != agente) ghost_unauthorizedRoleCallSucceeded = true;
+        if (caller != agent) ghost_unauthorizedRoleCallSucceeded = true;
     }
 
     // ── Pausas ──────────────────────────────────────────────────────────────────────────
 
-    function pausarOuDespausarToken(uint256 tokenSeed, uint256 chaosSeed) external {
+    function pauseOrUnpauseToken(uint256 tokenSeed, uint256 chaosSeed) external {
         if (tokens.length == 0) return;
         ParticipacaoToken token = _pickToken(tokenSeed);
-        bool estaPausado = token.paused();
-        address caller = _chaos(chaosSeed) ? _actorAt(chaosSeed) : agente;
+        bool isPaused = token.paused();
+        address caller = _chaos(chaosSeed) ? _actorAt(chaosSeed) : agent;
 
         vm.prank(caller);
-        if (estaPausado) {
+        if (isPaused) {
             gateway.despausarToken(address(token));
         } else {
             gateway.pausarToken(address(token));
         }
 
-        if (caller != agente) ghost_unauthorizedRoleCallSucceeded = true;
+        if (caller != agent) ghost_unauthorizedRoleCallSucceeded = true;
     }
 
-    function pausarOuDespausarFactory(uint256 chaosSeed) external {
-        bool estaPausado = factory.paused();
-        address caller = _chaos(chaosSeed) ? _actorAt(chaosSeed) : agente;
+    function pauseOrUnpauseFactory(uint256 chaosSeed) external {
+        bool isPaused = factory.paused();
+        address caller = _chaos(chaosSeed) ? _actorAt(chaosSeed) : agent;
 
         vm.prank(caller);
-        if (estaPausado) {
+        if (isPaused) {
             factory.unpause();
         } else {
             factory.pause();
         }
 
-        if (caller != agente) ghost_unauthorizedRoleCallSucceeded = true;
+        if (caller != agent) ghost_unauthorizedRoleCallSucceeded = true;
     }
 
-    // ── Tentativas de transferência titular→titular (deveriam sempre reverter) ────────────
+    // ── Holder→holder transfer attempts (should always revert) ────────────────────────────
 
-    function tentarTransferir(uint256 tokenSeed, uint256 fromSeed, uint256 toSeed, uint256 amountSeed) external {
+    function tryTransfer(uint256 tokenSeed, uint256 fromSeed, uint256 toSeed, uint256 amountSeed) external {
         if (tokens.length == 0) return;
         ParticipacaoToken token = _pickToken(tokenSeed);
         address from = _actorAt(fromSeed);
         address to = _distinctActor(toSeed, from);
 
-        uint256 saldo = token.balanceOf(from);
-        if (saldo == 0) return;
-        uint256 amount = bound(amountSeed, 1, saldo);
+        uint256 balance = token.balanceOf(from);
+        if (balance == 0) return;
+        uint256 amount = bound(amountSeed, 1, balance);
 
         vm.prank(from);
         token.transfer(to, amount);
 
-        // Só chega aqui se NÃO reverteu — a política nega-tudo foi violada.
+        // Only reaches here if it did NOT revert: the deny-all policy was violated.
         ghost_transferSucceeded = true;
     }
 
-    function tentarTransferirFrom(uint256 tokenSeed, uint256 fromSeed, uint256 toSeed, uint256 amountSeed) external {
+    function tryTransferFrom(uint256 tokenSeed, uint256 fromSeed, uint256 toSeed, uint256 amountSeed) external {
         if (tokens.length == 0) return;
         ParticipacaoToken token = _pickToken(tokenSeed);
         address from = _actorAt(fromSeed);
         address to = _distinctActor(toSeed, from);
 
-        uint256 saldo = token.balanceOf(from);
-        if (saldo == 0) return;
-        uint256 amount = bound(amountSeed, 1, saldo);
+        uint256 balance = token.balanceOf(from);
+        if (balance == 0) return;
+        uint256 amount = bound(amountSeed, 1, balance);
 
         vm.prank(from);
         token.approve(to, amount);
@@ -217,40 +217,40 @@ contract Handler is Test {
 
     // ── Tentativas de burlar onlyGateway direto no token ───────────────────────────────
 
-    function tentarChamarRestritaNoToken(uint256 tokenSeed, uint256 actorSeed, uint256 acaoSeed) external {
+    function tryCallRestrictedOnToken(uint256 tokenSeed, uint256 actorSeed, uint256 actionSeed) external {
         if (tokens.length == 0) return;
         ParticipacaoToken token = _pickToken(tokenSeed);
-        address ator = _actorAt(actorSeed);
-        uint256 acao = acaoSeed % 4;
+        address actor_ = _actorAt(actorSeed);
+        uint256 action = actionSeed % 4;
 
-        vm.prank(ator);
-        if (acao == 0) {
-            token.mint(ator, 1);
-        } else if (acao == 1) {
+        vm.prank(actor_);
+        if (action == 0) {
+            token.mint(actor_, 1);
+        } else if (action == 1) {
             token.setCotasAutorizadas(token.cotasAutorizadas() + 1);
-        } else if (acao == 2) {
+        } else if (action == 2) {
             token.pause();
         } else {
             token.unpause();
         }
 
-        // Só chega aqui se NÃO reverteu — `onlyGateway` foi burlado.
+        // Only reaches here if it did NOT revert: `onlyGateway` was bypassed.
         ghost_unauthorizedTokenCallSucceeded = true;
     }
 
-    // ── Tentativa de reinicializar um clone já inicializado ────────────────────────────
+    // ── Attempt to reinitialize an already initialized clone ────────────────────────────
 
-    function tentarReinicializar(uint256 tokenSeed) external {
+    function tryReinitialize(uint256 tokenSeed) external {
         if (tokens.length == 0) return;
         ParticipacaoToken token = _pickToken(tokenSeed);
 
         token.initialize("X", "X", address(gateway), address(gateway), "X", bytes32(0), "X");
 
-        // Só chega aqui se NÃO reverteu — inicialização dupla foi permitida.
+        // Only reaches here if it did NOT revert: double initialization was allowed.
         ghost_reinitializeSucceeded = true;
     }
 
-    // ── Views para o InvariantTest ──────────────────────────────────────────────────────
+    // ── Views for InvariantTest ─────────────────────────────────────────────────────────
 
     function numTokens() external view returns (uint256) {
         return tokens.length;

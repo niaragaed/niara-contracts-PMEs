@@ -13,17 +13,17 @@ import {MockBRL} from "../src/mocks/MockBRL.sol";
 import {OfertaOrquestrador} from "../src/orquestracao/OfertaOrquestrador.sol";
 import {MockEmissaoGatewayRevertaEmRegistrar} from "./mocks/MockEmissaoGatewayRevertaEmRegistrar.sol";
 
-/// @notice Contrato intermediário usado para provar que `emissorWallet` é sempre quem chamou
-/// `criarOfertaCompleta` por último — não há parâmetro na função para "repassar" outro
-/// endereço, então mesmo um relayer autorizado só consegue gravar a si mesmo como emissor.
-contract EmissorRelay {
+/// @notice Intermediate contract used to prove that `emissorWallet` is always whoever last
+/// called `criarOfertaCompleta`: the function has no parameter to "pass through" another
+/// address, so even an authorized relayer can only record itself as the issuer.
+contract IssuerRelay {
     OfertaOrquestrador public orq;
 
     constructor(OfertaOrquestrador orq_) {
         orq = orq_;
     }
 
-    function criar(
+    function create(
         string memory nome,
         string memory simbolo,
         string memory empresa,
@@ -34,7 +34,9 @@ contract EmissorRelay {
         uint256 precoPorCota,
         uint256 prazo
     ) external returns (address token, address oferta) {
-        return orq.criarOfertaCompleta(nome, simbolo, empresa, cnpjRef, serie, metaMinima, metaMaxima, precoPorCota, prazo);
+        return orq.criarOfertaCompleta(
+            nome, simbolo, empresa, cnpjRef, serie, metaMinima, metaMaxima, precoPorCota, prazo
+        );
     }
 }
 
@@ -42,7 +44,7 @@ contract OfertaOrquestradorTest is Test {
     ParticipacaoToken public tokenImpl;
     ParticipacaoTokenFactory public tokenFactory;
     EmissaoGateway public gateway;
-    OfertaCaptacao public ofertaImpl;
+    OfertaCaptacao public offeringImpl;
     OfertaCaptacaoFactory public captacaoFactory;
     RegistroInvestidorQualificado public registro;
     DenyAllTransferPolicy public policy;
@@ -50,30 +52,30 @@ contract OfertaOrquestradorTest is Test {
     OfertaOrquestrador public orq;
 
     address public admin = makeAddr("admin");
-    address public agentePlataforma = makeAddr("agentePlataforma");
-    address public agenteOrq = makeAddr("agenteOrq");
-    address public emissor1 = makeAddr("emissor1");
-    address public emissor2 = makeAddr("emissor2");
-    address public estranho = makeAddr("estranho");
+    address public platformAgent = makeAddr("agentePlataforma");
+    address public orchestratorAgent = makeAddr("agenteOrq");
+    address public issuer1 = makeAddr("emissor1");
+    address public issuer2 = makeAddr("emissor2");
+    address public stranger = makeAddr("estranho");
     address public protocoloWallet = makeAddr("protocoloWallet");
-    address public investidor1 = makeAddr("investidor1");
+    address public investor1 = makeAddr("investidor1");
 
     uint256 public constant TIMELOCK_DELAY = 1 hours;
-    uint256 public constant TAXA_BPS_INICIAL = 0;
-    uint256 public constant TETO_POR_INVESTIDOR_INICIAL = 1_000_000 ether;
+    uint256 public constant INITIAL_FEE_BPS = 0;
+    uint256 public constant INITIAL_PER_INVESTOR_CAP = 1_000_000 ether;
 
-    string public constant NOME = "Oferta Teste";
-    string public constant SIMBOLO = "nTST";
-    string public constant EMPRESA = "Empresa Teste Ltda";
+    string public constant NAME = "Oferta Teste";
+    string public constant SYMBOL = "nTST";
+    string public constant COMPANY = "Empresa Teste Ltda";
     bytes32 public constant CNPJ_REF = keccak256("12.345.678/0001-99");
-    string public constant SERIE = "2026-A";
+    string public constant SERIES = "2026-A";
 
-    // Valores "padrão" válidos para os testes que não estão testando um limite específico:
-    // metaMinima=800, metaMaxima=1000 (exatamente 125% -> passa o teste de lote adicional),
-    // precoPorCota=100 (1000 % 100 == 0 -> 10 cotas).
-    uint256 public constant META_MINIMA_PADRAO = 800 ether;
-    uint256 public constant META_MAXIMA_PADRAO = 1000 ether;
-    uint256 public constant PRECO_POR_COTA_PADRAO = 100 ether;
+    // Valid "default" values for tests that are not testing a specific limit:
+    // metaMinima=800, metaMaxima=1000 (exactly 125% -> passes the additional-lot check),
+    // precoPorCota=100 (1000 % 100 == 0 -> 10 shares).
+    uint256 public constant DEFAULT_MIN_TARGET = 800 ether;
+    uint256 public constant DEFAULT_MAX_TARGET = 1000 ether;
+    uint256 public constant DEFAULT_PRICE_PER_SHARE = 100 ether;
 
     function setUp() public {
         tokenImpl = new ParticipacaoToken();
@@ -84,9 +86,9 @@ contract OfertaOrquestradorTest is Test {
 
         registro = new RegistroInvestidorQualificado(admin, TIMELOCK_DELAY);
         moeda = new MockBRL();
-        ofertaImpl = new OfertaCaptacao();
+        offeringImpl = new OfertaCaptacao();
         captacaoFactory = new OfertaCaptacaoFactory(
-            admin, address(ofertaImpl), address(gateway), address(registro), address(moeda), TIMELOCK_DELAY
+            admin, address(offeringImpl), address(gateway), address(registro), address(moeda), TIMELOCK_DELAY
         );
 
         orq = new OfertaOrquestrador(
@@ -95,45 +97,53 @@ contract OfertaOrquestradorTest is Test {
             address(gateway),
             address(captacaoFactory),
             protocoloWallet,
-            TAXA_BPS_INICIAL,
-            TETO_POR_INVESTIDOR_INICIAL,
+            INITIAL_FEE_BPS,
+            INITIAL_PER_INVESTOR_CAP,
             TIMELOCK_DELAY
         );
 
-        // AGENTE_ROLE do orquestrador nos 3 contratos-alvo (ver PLANO_OFERTA_ORQUESTRADOR.md).
+        // The orchestrator's AGENTE_ROLE on the 3 target contracts (see PLANO_OFERTA_ORQUESTRADOR.md).
         _grantRole(address(tokenFactory), tokenFactory.AGENTE_ROLE(), address(orq));
         _grantRole(address(gateway), gateway.AGENTE_ROLE(), address(orq));
         _grantRole(address(captacaoFactory), captacaoFactory.AGENTE_ROLE(), address(orq));
 
-        // AGENTE_ROLE de um humano/script na infra real também, para ações manuais usadas nos
-        // testes (ex.: cancelar() de uma captação para simular "encerrada com falha").
-        _grantRole(address(gateway), gateway.AGENTE_ROLE(), agentePlataforma);
+        // AGENTE_ROLE for a human/script on the real infra too, for manual actions used in the
+        // tests (e.g. cancelar() on a fundraising to simulate "closed with failure").
+        _grantRole(address(gateway), gateway.AGENTE_ROLE(), platformAgent);
 
-        // AGENTE_ROLE do próprio orquestrador (allowlist/pausa).
-        _grantRole(address(orq), orq.AGENTE_ROLE(), agenteOrq);
+        // The orchestrator's own AGENTE_ROLE (allowlist/pause).
+        _grantRole(address(orq), orq.AGENTE_ROLE(), orchestratorAgent);
 
-        vm.prank(agenteOrq);
-        orq.autorizarEmissor(emissor1);
+        vm.prank(orchestratorAgent);
+        orq.autorizarEmissor(issuer1);
     }
 
     function _grantRole(address target, bytes32 role, address account) internal {
         vm.prank(admin);
         (bool ok1,) = target.call(abi.encodeWithSignature("proposeGrantRole(bytes32,address)", role, account));
-        require(ok1, "propose falhou");
+        require(ok1, "propose failed");
         vm.warp(block.timestamp + TIMELOCK_DELAY);
         vm.prank(admin);
         (bool ok2,) = target.call(abi.encodeWithSignature("executeGrantRole(bytes32,address)", role, account));
-        require(ok2, "execute falhou");
+        require(ok2, "execute failed");
     }
 
-    function _prazoValido() internal view returns (uint256) {
+    function _validDeadline() internal view returns (uint256) {
         return block.timestamp + 90 days;
     }
 
-    function _criarOfertaPadrao(address emissor) internal returns (address token, address oferta) {
+    function _createDefaultOffering(address emissor) internal returns (address token, address oferta) {
         vm.prank(emissor);
         return orq.criarOfertaCompleta(
-            NOME, SIMBOLO, EMPRESA, CNPJ_REF, SERIE, META_MINIMA_PADRAO, META_MAXIMA_PADRAO, PRECO_POR_COTA_PADRAO, _prazoValido()
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            DEFAULT_PRICE_PER_SHARE,
+            _validDeadline()
         );
     }
 
@@ -147,8 +157,8 @@ contract OfertaOrquestradorTest is Test {
             address(gateway),
             address(captacaoFactory),
             protocoloWallet,
-            TAXA_BPS_INICIAL,
-            TETO_POR_INVESTIDOR_INICIAL,
+            INITIAL_FEE_BPS,
+            INITIAL_PER_INVESTOR_CAP,
             TIMELOCK_DELAY
         );
     }
@@ -161,8 +171,8 @@ contract OfertaOrquestradorTest is Test {
             address(gateway),
             address(captacaoFactory),
             protocoloWallet,
-            TAXA_BPS_INICIAL,
-            TETO_POR_INVESTIDOR_INICIAL,
+            INITIAL_FEE_BPS,
+            INITIAL_PER_INVESTOR_CAP,
             TIMELOCK_DELAY
         );
     }
@@ -175,8 +185,8 @@ contract OfertaOrquestradorTest is Test {
             address(0),
             address(captacaoFactory),
             protocoloWallet,
-            TAXA_BPS_INICIAL,
-            TETO_POR_INVESTIDOR_INICIAL,
+            INITIAL_FEE_BPS,
+            INITIAL_PER_INVESTOR_CAP,
             TIMELOCK_DELAY
         );
     }
@@ -189,8 +199,8 @@ contract OfertaOrquestradorTest is Test {
             address(gateway),
             address(0),
             protocoloWallet,
-            TAXA_BPS_INICIAL,
-            TETO_POR_INVESTIDOR_INICIAL,
+            INITIAL_FEE_BPS,
+            INITIAL_PER_INVESTOR_CAP,
             TIMELOCK_DELAY
         );
     }
@@ -203,13 +213,13 @@ contract OfertaOrquestradorTest is Test {
             address(gateway),
             address(captacaoFactory),
             address(0),
-            TAXA_BPS_INICIAL,
-            TETO_POR_INVESTIDOR_INICIAL,
+            INITIAL_FEE_BPS,
+            INITIAL_PER_INVESTOR_CAP,
             TIMELOCK_DELAY
         );
     }
 
-    function test_Constructor_RevertsForTaxaBpsAcimaDoMaximo() public {
+    function test_Constructor_RevertsForFeeBpsAboveMax() public {
         vm.expectRevert(abi.encodeWithSelector(OfertaOrquestrador.TaxaExcedeMaximo.selector, 101, 100));
         new OfertaOrquestrador(
             admin,
@@ -218,7 +228,7 @@ contract OfertaOrquestradorTest is Test {
             address(captacaoFactory),
             protocoloWallet,
             101,
-            TETO_POR_INVESTIDOR_INICIAL,
+            INITIAL_PER_INVESTOR_CAP,
             TIMELOCK_DELAY
         );
     }
@@ -228,192 +238,241 @@ contract OfertaOrquestradorTest is Test {
         assertEq(orq.emissaoGateway(), address(gateway));
         assertEq(orq.captacaoFactory(), address(captacaoFactory));
         assertEq(orq.protocoloWallet(), protocoloWallet);
-        assertEq(orq.taxaBps(), TAXA_BPS_INICIAL);
-        assertEq(orq.tetoPorInvestidor(), TETO_POR_INVESTIDOR_INICIAL);
+        assertEq(orq.taxaBps(), INITIAL_FEE_BPS);
+        assertEq(orq.tetoPorInvestidor(), INITIAL_PER_INVESTOR_CAP);
         assertTrue(orq.hasRole(orq.DEFAULT_ADMIN_ROLE(), admin));
     }
 
     // ── Allowlist ───────────────────────────────────────────────────────────────────────────
 
-    function test_AutorizarEmissor_OnlyAgente() public {
-        vm.prank(estranho);
+    function test_AutorizarEmissor_OnlyAgent() public {
+        vm.prank(stranger);
         vm.expectRevert();
-        orq.autorizarEmissor(emissor2);
+        orq.autorizarEmissor(issuer2);
     }
 
     function test_AutorizarEmissor_RevertsForZeroAddress() public {
-        vm.prank(agenteOrq);
+        vm.prank(orchestratorAgent);
         vm.expectRevert(OfertaOrquestrador.ZeroAddress.selector);
         orq.autorizarEmissor(address(0));
     }
 
-    function test_RevogarEmissor_OnlyAgente() public {
-        vm.prank(estranho);
+    function test_RevogarEmissor_OnlyAgent() public {
+        vm.prank(stranger);
         vm.expectRevert();
-        orq.revogarEmissor(emissor1);
+        orq.revogarEmissor(issuer1);
     }
 
-    function test_CriarOfertaCompleta_RevertsForEmissorNaoAutorizado() public {
-        vm.prank(emissor2);
-        vm.expectRevert(abi.encodeWithSelector(OfertaOrquestrador.EmissorNaoAutorizado.selector, emissor2));
+    function test_CriarOfertaCompleta_RevertsForUnauthorizedIssuer() public {
+        vm.prank(issuer2);
+        vm.expectRevert(abi.encodeWithSelector(OfertaOrquestrador.EmissorNaoAutorizado.selector, issuer2));
         orq.criarOfertaCompleta(
-            NOME, SIMBOLO, EMPRESA, CNPJ_REF, SERIE, META_MINIMA_PADRAO, META_MAXIMA_PADRAO, PRECO_POR_COTA_PADRAO, _prazoValido()
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            DEFAULT_PRICE_PER_SHARE,
+            _validDeadline()
         );
     }
 
-    function test_CriarOfertaCompleta_RevertsAposRevogacao() public {
-        _criarOfertaPadrao(emissor1);
+    function test_CriarOfertaCompleta_RevertsAfterRevocation() public {
+        _createDefaultOffering(issuer1);
 
-        vm.prank(agenteOrq);
-        orq.revogarEmissor(emissor1);
+        vm.prank(orchestratorAgent);
+        orq.revogarEmissor(issuer1);
 
-        vm.prank(emissor1);
-        vm.expectRevert(abi.encodeWithSelector(OfertaOrquestrador.EmissorNaoAutorizado.selector, emissor1));
+        vm.prank(issuer1);
+        vm.expectRevert(abi.encodeWithSelector(OfertaOrquestrador.EmissorNaoAutorizado.selector, issuer1));
         orq.criarOfertaCompleta(
-            NOME, SIMBOLO, EMPRESA, CNPJ_REF, SERIE, META_MINIMA_PADRAO, META_MAXIMA_PADRAO, PRECO_POR_COTA_PADRAO, _prazoValido()
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            DEFAULT_PRICE_PER_SHARE,
+            _validDeadline()
         );
     }
 
     // ── Limites Res. CVM 88 — boundary exato ───────────────────────────────────────────────
 
-    function test_CriarOfertaCompleta_PrazoExatamente180Dias_Succeeds() public {
+    function test_CriarOfertaCompleta_DeadlineExactly180Days_Succeeds() public {
         uint256 prazo = block.timestamp + 180 days;
-        vm.prank(emissor1);
+        vm.prank(issuer1);
         (address token, address oferta) = orq.criarOfertaCompleta(
-            NOME, SIMBOLO, EMPRESA, CNPJ_REF, SERIE, META_MINIMA_PADRAO, META_MAXIMA_PADRAO, PRECO_POR_COTA_PADRAO, prazo
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            DEFAULT_PRICE_PER_SHARE,
+            prazo
         );
         assertTrue(tokenFactory.isOferta(token));
         assertTrue(captacaoFactory.isCaptacao(oferta));
     }
 
-    function test_CriarOfertaCompleta_Prazo180DiasMaisUmSegundo_Reverts() public {
+    function test_CriarOfertaCompleta_Deadline180DaysPlusOneSecond_Reverts() public {
         uint256 prazo = block.timestamp + 180 days + 1;
-        vm.prank(emissor1);
+        vm.prank(issuer1);
         vm.expectRevert(abi.encodeWithSelector(OfertaOrquestrador.PrazoExcedeLimite.selector, prazo, 180 days));
         orq.criarOfertaCompleta(
-            NOME, SIMBOLO, EMPRESA, CNPJ_REF, SERIE, META_MINIMA_PADRAO, META_MAXIMA_PADRAO, PRECO_POR_COTA_PADRAO, prazo
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            DEFAULT_PRICE_PER_SHARE,
+            prazo
         );
     }
 
-    function test_CriarOfertaCompleta_RevertsForPrazoNoPassadoOuPresente() public {
-        vm.prank(emissor1);
+    function test_CriarOfertaCompleta_RevertsForDeadlineInPastOrPresent() public {
+        vm.prank(issuer1);
         vm.expectRevert(abi.encodeWithSelector(OfertaOrquestrador.PrazoInvalido.selector, block.timestamp));
         orq.criarOfertaCompleta(
-            NOME,
-            SIMBOLO,
-            EMPRESA,
+            NAME,
+            SYMBOL,
+            COMPANY,
             CNPJ_REF,
-            SERIE,
-            META_MINIMA_PADRAO,
-            META_MAXIMA_PADRAO,
-            PRECO_POR_COTA_PADRAO,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            DEFAULT_PRICE_PER_SHARE,
             block.timestamp
         );
     }
 
-    function test_CriarOfertaCompleta_MetaMaximaExatamenteNoTeto_Succeeds() public {
+    function test_CriarOfertaCompleta_MaxTargetExactlyAtCap_Succeeds() public {
         uint256 metaMaxima = orq.TETO_OFERTA(); // 15_000_000 ether
         uint256 metaMinima = 12_000_000 ether; // metaMaxima*100 == metaMinima*125, exato
         uint256 precoPorCota = 1_000_000 ether; // 15_000_000 % 1_000_000 == 0
 
-        vm.prank(emissor1);
-        (address token,) =
-            orq.criarOfertaCompleta(NOME, SIMBOLO, EMPRESA, CNPJ_REF, SERIE, metaMinima, metaMaxima, precoPorCota, _prazoValido());
+        vm.prank(issuer1);
+        (address token,) = orq.criarOfertaCompleta(
+            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, metaMinima, metaMaxima, precoPorCota, _validDeadline()
+        );
         assertEq(ParticipacaoToken(token).cotasAutorizadas(), 15 ether);
     }
 
-    function test_CriarOfertaCompleta_MetaMaximaExcedeTetoPorUmWei_Reverts() public {
+    function test_CriarOfertaCompleta_MaxTargetExceedsCapByOneWei_Reverts() public {
         uint256 teto = orq.TETO_OFERTA();
         uint256 metaMaxima = teto + 1;
         uint256 metaMinima = 12_000_000 ether;
 
-        vm.prank(emissor1);
+        vm.prank(issuer1);
         vm.expectRevert(abi.encodeWithSelector(OfertaOrquestrador.MetaMaximaExcedeTeto.selector, metaMaxima, teto));
         orq.criarOfertaCompleta(
-            NOME, SIMBOLO, EMPRESA, CNPJ_REF, SERIE, metaMinima, metaMaxima, 1_000_000 ether, _prazoValido()
+            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, metaMinima, metaMaxima, 1_000_000 ether, _validDeadline()
         );
     }
 
-    function test_CriarOfertaCompleta_LoteAdicionalExatamente125PorCento_Succeeds() public {
+    function test_CriarOfertaCompleta_AdditionalLotExactly125Percent_Succeeds() public {
         // META_MAXIMA_PADRAO * 100 == META_MINIMA_PADRAO * 125 (1000*100 == 800*125 == 100_000)
-        (address token, address oferta) = _criarOfertaPadrao(emissor1);
+        (address token, address oferta) = _createDefaultOffering(issuer1);
         assertTrue(tokenFactory.isOferta(token));
         assertTrue(captacaoFactory.isCaptacao(oferta));
     }
 
-    function test_CriarOfertaCompleta_LoteAdicionalExcede125PorCotaPorUmWei_Reverts() public {
-        uint256 metaMinima = META_MINIMA_PADRAO; // 800 ether
-        uint256 metaMaxima = META_MAXIMA_PADRAO + 1; // 1000 ether + 1 wei
+    function test_CriarOfertaCompleta_AdditionalLotExceeds125PercentByOneWei_Reverts() public {
+        uint256 metaMinima = DEFAULT_MIN_TARGET; // 800 ether
+        uint256 metaMaxima = DEFAULT_MAX_TARGET + 1; // 1000 ether + 1 wei
 
-        vm.prank(emissor1);
+        vm.prank(issuer1);
         vm.expectRevert(
             abi.encodeWithSelector(OfertaOrquestrador.LoteAdicionalExcedeLimite.selector, metaMaxima, metaMinima)
         );
         orq.criarOfertaCompleta(
-            NOME, SIMBOLO, EMPRESA, CNPJ_REF, SERIE, metaMinima, metaMaxima, PRECO_POR_COTA_PADRAO, _prazoValido()
+            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, metaMinima, metaMaxima, DEFAULT_PRICE_PER_SHARE, _validDeadline()
         );
     }
 
-    // ── Aritmética / derivação ──────────────────────────────────────────────────────────────
+    // ── Arithmetic / derivation ─────────────────────────────────────────────────────────────
 
-    function test_CriarOfertaCompleta_RevertsForPrecoPorCotaZero_ComErroNomeado() public {
-        vm.prank(emissor1);
+    function test_CriarOfertaCompleta_RevertsForZeroPricePerShare_WithNamedError() public {
+        vm.prank(issuer1);
         vm.expectRevert(OfertaOrquestrador.PrecoInvalido.selector);
         orq.criarOfertaCompleta(
-            NOME, SIMBOLO, EMPRESA, CNPJ_REF, SERIE, META_MINIMA_PADRAO, META_MAXIMA_PADRAO, 0, _prazoValido()
+            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, DEFAULT_MIN_TARGET, DEFAULT_MAX_TARGET, 0, _validDeadline()
         );
     }
 
-    function test_CriarOfertaCompleta_RevertsForMetaMaximaNaoMultiplaDoPreco() public {
+    function test_CriarOfertaCompleta_RevertsForMaxTargetNotMultipleOfPrice() public {
         uint256 precoPorCota = 300 ether; // 1000 % 300 != 0
-        vm.prank(emissor1);
+        vm.prank(issuer1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                OfertaOrquestrador.PrecoNaoDivideMetaMaxima.selector, META_MAXIMA_PADRAO, precoPorCota
+                OfertaOrquestrador.PrecoNaoDivideMetaMaxima.selector, DEFAULT_MAX_TARGET, precoPorCota
             )
         );
         orq.criarOfertaCompleta(
-            NOME, SIMBOLO, EMPRESA, CNPJ_REF, SERIE, META_MINIMA_PADRAO, META_MAXIMA_PADRAO, precoPorCota, _prazoValido()
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            precoPorCota,
+            _validDeadline()
         );
     }
 
-    function test_CriarOfertaCompleta_CotasAutorizadasEDerivadaCorretamente() public {
-        (address token,) = _criarOfertaPadrao(emissor1);
-        // metaMaxima/precoPorCota = 1000/100 = 10 cotas -> 10 ether em unidade bruta.
+    function test_CriarOfertaCompleta_AuthorizedSharesDerivedCorrectly() public {
+        (address token,) = _createDefaultOffering(issuer1);
+        // metaMaxima/precoPorCota = 1000/100 = 10 shares -> 10 ether in raw units.
         assertEq(ParticipacaoToken(token).cotasAutorizadas(), 10 ether);
     }
 
-    // ── Anti-manipulação ────────────────────────────────────────────────────────────────────
+    // ── Anti-manipulation ───────────────────────────────────────────────────────────────────
 
-    function test_CriarOfertaCompleta_EmissorWalletEhSempreMsgSender() public {
-        (, address oferta) = _criarOfertaPadrao(emissor1);
-        assertEq(OfertaCaptacao(oferta).emissorWallet(), emissor1);
+    function test_CriarOfertaCompleta_IssuerWalletIsAlwaysMsgSender() public {
+        (, address oferta) = _createDefaultOffering(issuer1);
+        assertEq(OfertaCaptacao(oferta).emissorWallet(), issuer1);
     }
 
-    function test_CriarOfertaCompleta_EmissorWalletEhSempreMsgSender_MesmoViaContratoIntermediario() public {
-        EmissorRelay relay = new EmissorRelay(orq);
+    function test_CriarOfertaCompleta_IssuerWalletIsAlwaysMsgSender_EvenViaIntermediaryContract() public {
+        IssuerRelay relay = new IssuerRelay(orq);
 
-        vm.prank(agenteOrq);
+        vm.prank(orchestratorAgent);
         orq.autorizarEmissor(address(relay));
 
-        (, address oferta) = relay.criar(
-            NOME, SIMBOLO, EMPRESA, CNPJ_REF, SERIE, META_MINIMA_PADRAO, META_MAXIMA_PADRAO, PRECO_POR_COTA_PADRAO, _prazoValido()
+        (, address oferta) = relay.create(
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            DEFAULT_PRICE_PER_SHARE,
+            _validDeadline()
         );
 
-        // Não existe parâmetro de `criarOfertaCompleta` para "repassar" outro emissor — mesmo
-        // um relayer autorizado só consegue gravar a si mesmo, nunca um terceiro.
+        // `criarOfertaCompleta` has no parameter to "pass through" another issuer: even an
+        // authorized relayer can only record itself, never a third party.
         assertEq(OfertaCaptacao(oferta).emissorWallet(), address(relay));
     }
 
-    function test_CriarOfertaCompleta_TaxaBpsEProtocoloWalletVemDoStorageDoOrquestrador() public {
-        (, address oferta) = _criarOfertaPadrao(emissor1);
-        assertEq(OfertaCaptacao(oferta).taxaBps(), TAXA_BPS_INICIAL);
+    function test_CriarOfertaCompleta_FeeBpsAndProtocolWalletComeFromOrchestratorStorage() public {
+        (, address oferta) = _createDefaultOffering(issuer1);
+        assertEq(OfertaCaptacao(oferta).taxaBps(), INITIAL_FEE_BPS);
         assertEq(OfertaCaptacao(oferta).protocoloWallet(), protocoloWallet);
-        assertEq(OfertaCaptacao(oferta).tetoPorInvestidor(), TETO_POR_INVESTIDOR_INICIAL);
+        assertEq(OfertaCaptacao(oferta).tetoPorInvestidor(), INITIAL_PER_INVESTOR_CAP);
     }
 
-    function test_CriarOfertaCompleta_MudancaDeParametrosSoAfetaOfertasFuturas() public {
-        (, address ofertaAntiga) = _criarOfertaPadrao(emissor1);
+    function test_CriarOfertaCompleta_ParameterChangeOnlyAffectsFutureOfferings() public {
+        (, address oldOffering) = _createDefaultOffering(issuer1);
 
         // Muda taxaBps e protocoloWallet via timelock.
         address novoProtocoloWallet = makeAddr("novoProtocoloWallet");
@@ -427,261 +486,296 @@ contract OfertaOrquestradorTest is Test {
         vm.prank(admin);
         orq.executeSetProtocoloWallet(novoProtocoloWallet);
 
-        // Fecha a oferta antiga (falha) para poder abrir a segunda do mesmo emissor.
-        vm.prank(agentePlataforma);
-        OfertaCaptacao(ofertaAntiga).cancelar();
+        // Closes the old offering (failure) so the same issuer can open a second one.
+        vm.prank(platformAgent);
+        OfertaCaptacao(oldOffering).cancelar();
 
-        (, address ofertaNova) = _criarOfertaPadrao(emissor1);
+        (, address newOffering) = _createDefaultOffering(issuer1);
 
-        // A antiga manteve os parâmetros vigentes no momento em que foi criada.
-        assertEq(OfertaCaptacao(ofertaAntiga).taxaBps(), TAXA_BPS_INICIAL);
-        assertEq(OfertaCaptacao(ofertaAntiga).protocoloWallet(), protocoloWallet);
-        // A nova reflete os parâmetros vigentes agora.
-        assertEq(OfertaCaptacao(ofertaNova).taxaBps(), 50);
-        assertEq(OfertaCaptacao(ofertaNova).protocoloWallet(), novoProtocoloWallet);
+        // The old one kept the parameters in effect when it was created.
+        assertEq(OfertaCaptacao(oldOffering).taxaBps(), INITIAL_FEE_BPS);
+        assertEq(OfertaCaptacao(oldOffering).protocoloWallet(), protocoloWallet);
+        // The new one reflects the parameters in effect now.
+        assertEq(OfertaCaptacao(newOffering).taxaBps(), 50);
+        assertEq(OfertaCaptacao(newOffering).protocoloWallet(), novoProtocoloWallet);
     }
 
-    // ── Uma oferta aberta por vez ───────────────────────────────────────────────────────────
+    // ── One open offering at a time ─────────────────────────────────────────────────────────
 
-    function test_CriarOfertaCompleta_RevertsSeAnteriorAindaAberta() public {
-        (, address ofertaAnterior) = _criarOfertaPadrao(emissor1);
+    function test_CriarOfertaCompleta_RevertsIfPreviousStillOpen() public {
+        (, address ofertaAnterior) = _createDefaultOffering(issuer1);
 
-        vm.prank(emissor1);
+        vm.prank(issuer1);
         vm.expectRevert(abi.encodeWithSelector(OfertaOrquestrador.OfertaAnteriorAindaAberta.selector, ofertaAnterior));
         orq.criarOfertaCompleta(
-            NOME, SIMBOLO, EMPRESA, CNPJ_REF, SERIE, META_MINIMA_PADRAO, META_MAXIMA_PADRAO, PRECO_POR_COTA_PADRAO, _prazoValido()
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            DEFAULT_PRICE_PER_SHARE,
+            _validDeadline()
         );
     }
 
-    function test_CriarOfertaCompleta_PermiteSegundaAposEncerradaComFalha() public {
-        (, address ofertaAnterior) = _criarOfertaPadrao(emissor1);
+    function test_CriarOfertaCompleta_AllowsSecondAfterClosedWithFailure() public {
+        (, address ofertaAnterior) = _createDefaultOffering(issuer1);
 
-        vm.prank(agentePlataforma);
+        vm.prank(platformAgent);
         OfertaCaptacao(ofertaAnterior).cancelar();
         assertEq(uint256(OfertaCaptacao(ofertaAnterior).estado()), uint256(OfertaCaptacao.Estado.EncerradaFalha));
 
-        (address token2, address oferta2) = _criarOfertaPadrao(emissor1);
+        (address token2, address offering2) = _createDefaultOffering(issuer1);
         assertTrue(tokenFactory.isOferta(token2));
-        assertTrue(captacaoFactory.isCaptacao(oferta2));
-        assertEq(orq.numOfertasDoEmissor(emissor1), 2);
+        assertTrue(captacaoFactory.isCaptacao(offering2));
+        assertEq(orq.numOfertasDoEmissor(issuer1), 2);
     }
 
-    function test_CriarOfertaCompleta_PermiteSegundaAposEncerradaComSucesso() public {
-        // metaMinima == metaMaxima para permitir encerrar() antes do prazo (subscrição cheia).
-        uint256 meta = 1000 ether;
+    function test_CriarOfertaCompleta_AllowsSecondAfterClosedWithSuccess() public {
+        // metaMinima == metaMaxima to allow encerrar() before the deadline (fully subscribed).
+        uint256 target = 1000 ether;
         uint256 precoPorCota = 100 ether;
 
-        vm.prank(emissor1);
-        (, address ofertaAnterior) =
-            orq.criarOfertaCompleta(NOME, SIMBOLO, EMPRESA, CNPJ_REF, SERIE, meta, meta, precoPorCota, _prazoValido());
+        vm.prank(issuer1);
+        (, address ofertaAnterior) = orq.criarOfertaCompleta(
+            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, target, target, precoPorCota, _validDeadline()
+        );
 
-        moeda.mint(investidor1, meta);
-        vm.prank(investidor1);
-        moeda.approve(ofertaAnterior, meta);
-        vm.prank(investidor1);
-        OfertaCaptacao(ofertaAnterior).aportar(meta);
+        moeda.mint(investor1, target);
+        vm.prank(investor1);
+        moeda.approve(ofertaAnterior, target);
+        vm.prank(investor1);
+        OfertaCaptacao(ofertaAnterior).aportar(target);
 
         OfertaCaptacao(ofertaAnterior).encerrar();
         assertEq(uint256(OfertaCaptacao(ofertaAnterior).estado()), uint256(OfertaCaptacao.Estado.EncerradaSucesso));
 
-        (, address oferta2) = _criarOfertaPadrao(emissor1);
-        assertTrue(captacaoFactory.isCaptacao(oferta2));
+        (, address offering2) = _createDefaultOffering(issuer1);
+        assertTrue(captacaoFactory.isCaptacao(offering2));
     }
 
     // ── Atomicidade ─────────────────────────────────────────────────────────────────────────
 
-    function test_CriarOfertaCompleta_RevertsSemPapeisConcedidos_SemEstadoParcial() public {
-        OfertaOrquestrador orqSemPapel = new OfertaOrquestrador(
+    function test_CriarOfertaCompleta_RevertsWithoutGrantedRoles_NoPartialState() public {
+        OfertaOrquestrador orchestratorWithoutRole = new OfertaOrquestrador(
             admin,
             address(tokenFactory),
             address(gateway),
             address(captacaoFactory),
             protocoloWallet,
-            TAXA_BPS_INICIAL,
-            TETO_POR_INVESTIDOR_INICIAL,
+            INITIAL_FEE_BPS,
+            INITIAL_PER_INVESTOR_CAP,
             TIMELOCK_DELAY
         );
-        _grantRole(address(orqSemPapel), orqSemPapel.AGENTE_ROLE(), agenteOrq);
-        vm.prank(agenteOrq);
-        orqSemPapel.autorizarEmissor(emissor1);
+        _grantRole(address(orchestratorWithoutRole), orchestratorWithoutRole.AGENTE_ROLE(), orchestratorAgent);
+        vm.prank(orchestratorAgent);
+        orchestratorWithoutRole.autorizarEmissor(issuer1);
 
-        uint256 numOfertasAntes = tokenFactory.numOfertas();
-        uint256 numCaptacoesAntes = captacaoFactory.numCaptacoes();
+        uint256 offeringCountBefore = tokenFactory.numOfertas();
+        uint256 fundraisingCountBefore = captacaoFactory.numCaptacoes();
 
-        vm.prank(emissor1);
+        vm.prank(issuer1);
         vm.expectRevert();
-        orqSemPapel.criarOfertaCompleta(
-            NOME, SIMBOLO, EMPRESA, CNPJ_REF, SERIE, META_MINIMA_PADRAO, META_MAXIMA_PADRAO, PRECO_POR_COTA_PADRAO, _prazoValido()
+        orchestratorWithoutRole.criarOfertaCompleta(
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            DEFAULT_PRICE_PER_SHARE,
+            _validDeadline()
         );
 
-        assertEq(tokenFactory.numOfertas(), numOfertasAntes);
-        assertEq(captacaoFactory.numCaptacoes(), numCaptacoesAntes);
-        assertEq(orqSemPapel.numOfertasDoEmissor(emissor1), 0);
+        assertEq(tokenFactory.numOfertas(), offeringCountBefore);
+        assertEq(captacaoFactory.numCaptacoes(), fundraisingCountBefore);
+        assertEq(orchestratorWithoutRole.numOfertasDoEmissor(issuer1), 0);
     }
 
-    function test_CriarOfertaCompleta_RevertNaQuartaChamada_NaoCriaNadaEmNenhumLugar() public {
+    function test_CriarOfertaCompleta_RevertOnFourthCall_CreatesNothingAnywhere() public {
         MockEmissaoGatewayRevertaEmRegistrar mockGateway = new MockEmissaoGatewayRevertaEmRegistrar();
 
-        OfertaOrquestrador orqAtomico = new OfertaOrquestrador(
+        OfertaOrquestrador atomicOrchestrator = new OfertaOrquestrador(
             admin,
             address(tokenFactory),
             address(mockGateway),
             address(captacaoFactory),
             protocoloWallet,
-            TAXA_BPS_INICIAL,
-            TETO_POR_INVESTIDOR_INICIAL,
+            INITIAL_FEE_BPS,
+            INITIAL_PER_INVESTOR_CAP,
             TIMELOCK_DELAY
         );
-        _grantRole(address(tokenFactory), tokenFactory.AGENTE_ROLE(), address(orqAtomico));
-        _grantRole(address(captacaoFactory), captacaoFactory.AGENTE_ROLE(), address(orqAtomico));
-        _grantRole(address(orqAtomico), orqAtomico.AGENTE_ROLE(), agenteOrq);
+        _grantRole(address(tokenFactory), tokenFactory.AGENTE_ROLE(), address(atomicOrchestrator));
+        _grantRole(address(captacaoFactory), captacaoFactory.AGENTE_ROLE(), address(atomicOrchestrator));
+        _grantRole(address(atomicOrchestrator), atomicOrchestrator.AGENTE_ROLE(), orchestratorAgent);
 
-        vm.prank(agenteOrq);
-        orqAtomico.autorizarEmissor(emissor1);
+        vm.prank(orchestratorAgent);
+        atomicOrchestrator.autorizarEmissor(issuer1);
 
-        uint256 numOfertasAntes = tokenFactory.numOfertas();
-        uint256 numCaptacoesAntes = captacaoFactory.numCaptacoes();
+        uint256 offeringCountBefore = tokenFactory.numOfertas();
+        uint256 fundraisingCountBefore = captacaoFactory.numCaptacoes();
 
-        // `Clones.clone` usa CREATE simples (não CREATE2) — o endereço que TERIA sido criado nas
-        // subchamadas 1 e 3 é previsível a partir do nonce atual de cada factory, mesmo com a
-        // chamada revertendo antes do fim. Prever os dois endereços aqui permite checar depois,
-        // de forma pontual (não só por contagem agregada), que nenhum dos dois foi parar no
-        // registro (`isOferta`/`isCaptacao`) da respectiva factory.
-        address tokenPrevisto = vm.computeCreateAddress(address(tokenFactory), vm.getNonce(address(tokenFactory)));
-        address ofertaPrevista =
+        // `Clones.clone` uses plain CREATE (not CREATE2): the address that WOULD have been created
+        // in subcalls 1 and 3 is predictable from each factory's current nonce, even with the call
+        // reverting before the end. Predicting both addresses here lets us check afterwards,
+        // precisely (not only by aggregate count), that neither ended up in the respective
+        // factory's registry (`isOferta`/`isCaptacao`).
+        address predictedToken = vm.computeCreateAddress(address(tokenFactory), vm.getNonce(address(tokenFactory)));
+        address predictedOffering =
             vm.computeCreateAddress(address(captacaoFactory), vm.getNonce(address(captacaoFactory)));
 
-        vm.prank(emissor1);
-        vm.expectRevert(MockEmissaoGatewayRevertaEmRegistrar.FalhaForcadaParaTeste.selector);
-        orqAtomico.criarOfertaCompleta(
-            NOME, SIMBOLO, EMPRESA, CNPJ_REF, SERIE, META_MINIMA_PADRAO, META_MAXIMA_PADRAO, PRECO_POR_COTA_PADRAO, _prazoValido()
+        vm.prank(issuer1);
+        vm.expectRevert(MockEmissaoGatewayRevertaEmRegistrar.ForcedTestFailure.selector);
+        atomicOrchestrator.criarOfertaCompleta(
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            DEFAULT_PRICE_PER_SHARE,
+            _validDeadline()
         );
 
-        // Nem o token, nem a captação (criados nas subchamadas 1 e 3, ANTES da falha na 4ª)
-        // persistem — a EVM desfaz tudo atomicamente, inclusive os dois `Clones.clone`.
-        assertEq(tokenFactory.numOfertas(), numOfertasAntes);
-        assertEq(captacaoFactory.numCaptacoes(), numCaptacoesAntes);
-        assertEq(orqAtomico.numOfertasDoEmissor(emissor1), 0);
-        assertEq(orqAtomico.ultimaOfertaDoEmissor(emissor1), address(0));
+        // Neither the token nor the fundraising (created in subcalls 1 and 3, BEFORE the failure in
+        // the 4th) persists: the EVM undoes everything atomically, including both `Clones.clone` calls.
+        assertEq(tokenFactory.numOfertas(), offeringCountBefore);
+        assertEq(captacaoFactory.numCaptacoes(), fundraisingCountBefore);
+        assertEq(atomicOrchestrator.numOfertasDoEmissor(issuer1), 0);
+        assertEq(atomicOrchestrator.ultimaOfertaDoEmissor(issuer1), address(0));
 
-        // Reforço pontual: nem o endereço que o clone do token TERIA tido, nem o da captação,
-        // aparecem registrados nas respectivas factories — não é só a contagem agregada que
-        // ficou inalterada, o endereço específico nunca foi gravado em `isOferta`/`isCaptacao`.
-        assertFalse(tokenFactory.isOferta(tokenPrevisto));
-        assertFalse(captacaoFactory.isCaptacao(ofertaPrevista));
+        // Precise reinforcement: neither the address the token clone WOULD have had nor the
+        // fundraising's appears registered in the respective factories. It is not only the aggregate
+        // count that stayed unchanged; the specific address was never written to `isOferta`/`isCaptacao`.
+        assertFalse(tokenFactory.isOferta(predictedToken));
+        assertFalse(captacaoFactory.isCaptacao(predictedOffering));
     }
 
     // ── Pausa ───────────────────────────────────────────────────────────────────────────────
 
-    function test_Pause_OnlyAgente() public {
-        vm.prank(estranho);
+    function test_Pause_OnlyAgent() public {
+        vm.prank(stranger);
         vm.expectRevert();
         orq.pause();
     }
 
-    function test_Pause_BloqueiaCriarOfertaCompleta() public {
-        vm.prank(agenteOrq);
+    function test_Pause_BlocksCriarOfertaCompleta() public {
+        vm.prank(orchestratorAgent);
         orq.pause();
 
-        vm.prank(emissor1);
+        vm.prank(issuer1);
         vm.expectRevert();
         orq.criarOfertaCompleta(
-            NOME, SIMBOLO, EMPRESA, CNPJ_REF, SERIE, META_MINIMA_PADRAO, META_MAXIMA_PADRAO, PRECO_POR_COTA_PADRAO, _prazoValido()
+            NAME,
+            SYMBOL,
+            COMPANY,
+            CNPJ_REF,
+            SERIES,
+            DEFAULT_MIN_TARGET,
+            DEFAULT_MAX_TARGET,
+            DEFAULT_PRICE_PER_SHARE,
+            _validDeadline()
         );
     }
 
-    function test_Pause_NaoAfetaOfertasJaVivas() public {
-        uint256 meta = 1000 ether;
+    function test_Pause_DoesNotAffectLiveOfferings() public {
+        uint256 target = 1000 ether;
         uint256 precoPorCota = 100 ether;
 
-        vm.prank(emissor1);
-        (address token, address oferta) =
-            orq.criarOfertaCompleta(NOME, SIMBOLO, EMPRESA, CNPJ_REF, SERIE, meta, meta, precoPorCota, _prazoValido());
+        vm.prank(issuer1);
+        (address token, address oferta) = orq.criarOfertaCompleta(
+            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, target, target, precoPorCota, _validDeadline()
+        );
 
-        moeda.mint(investidor1, meta);
-        vm.prank(investidor1);
-        moeda.approve(oferta, meta);
+        moeda.mint(investor1, target);
+        vm.prank(investor1);
+        moeda.approve(oferta, target);
 
-        vm.prank(agenteOrq);
+        vm.prank(orchestratorAgent);
         orq.pause();
 
-        // Aportar, encerrar e resgatar continuam funcionando com o orquestrador pausado — a
-        // pausa só desliga `criarOfertaCompleta`.
-        vm.prank(investidor1);
-        OfertaCaptacao(oferta).aportar(meta);
+        // Investing, closing and redeeming keep working with the orchestrator paused: the
+        // pause only turns off `criarOfertaCompleta`.
+        vm.prank(investor1);
+        OfertaCaptacao(oferta).aportar(target);
 
         OfertaCaptacao(oferta).encerrar();
         assertEq(uint256(OfertaCaptacao(oferta).estado()), uint256(OfertaCaptacao.Estado.EncerradaSucesso));
 
-        vm.prank(investidor1);
+        vm.prank(investor1);
         OfertaCaptacao(oferta).resgatarCotas();
-        assertEq(ParticipacaoToken(token).balanceOf(investidor1), 10 ether);
+        assertEq(ParticipacaoToken(token).balanceOf(investor1), 10 ether);
     }
 
-    function test_Unpause_OnlyAgente() public {
-        vm.prank(agenteOrq);
+    function test_Unpause_OnlyAgent() public {
+        vm.prank(orchestratorAgent);
         orq.pause();
 
-        vm.prank(estranho);
+        vm.prank(stranger);
         vm.expectRevert();
         orq.unpause();
 
-        vm.prank(agenteOrq);
+        vm.prank(orchestratorAgent);
         orq.unpause();
 
-        (address token,) = _criarOfertaPadrao(emissor1);
+        (address token,) = _createDefaultOffering(issuer1);
         assertTrue(tokenFactory.isOferta(token));
     }
 
     // ── Ciclo completo ponta a ponta ────────────────────────────────────────────────────────
 
-    function test_CicloCompleto_CriaAportaEncerraResgata() public {
-        uint256 meta = 1000 ether;
+    function test_FullCycle_CreateInvestCloseRedeem() public {
+        uint256 target = 1000 ether;
         uint256 precoPorCota = 100 ether;
 
-        vm.prank(emissor1);
-        (address token, address oferta) =
-            orq.criarOfertaCompleta(NOME, SIMBOLO, EMPRESA, CNPJ_REF, SERIE, meta, meta, precoPorCota, _prazoValido());
+        vm.prank(issuer1);
+        (address token, address oferta) = orq.criarOfertaCompleta(
+            NAME, SYMBOL, COMPANY, CNPJ_REF, SERIES, target, target, precoPorCota, _validDeadline()
+        );
 
-        moeda.mint(investidor1, meta);
-        vm.prank(investidor1);
-        moeda.approve(oferta, meta);
-        vm.prank(investidor1);
-        OfertaCaptacao(oferta).aportar(meta);
+        moeda.mint(investor1, target);
+        vm.prank(investor1);
+        moeda.approve(oferta, target);
+        vm.prank(investor1);
+        OfertaCaptacao(oferta).aportar(target);
 
         OfertaCaptacao(oferta).encerrar();
         assertEq(uint256(OfertaCaptacao(oferta).estado()), uint256(OfertaCaptacao.Estado.EncerradaSucesso));
 
-        vm.prank(investidor1);
+        vm.prank(investor1);
         OfertaCaptacao(oferta).resgatarCotas();
 
-        // meta/precoPorCota = 10 cotas -> 10 ether em unidade bruta do token.
-        assertEq(ParticipacaoToken(token).balanceOf(investidor1), 10 ether);
+        // target/precoPorCota = 10 shares -> 10 ether in the token's raw units.
+        assertEq(ParticipacaoToken(token).balanceOf(investor1), 10 ether);
     }
 
-    // ── Governança dos parâmetros de plataforma (timelock) ─────────────────────────────────
+    // ── Governance of platform parameters (timelock) ───────────────────────────────────────
 
     function test_ProposeSetTaxaBps_OnlyDefaultAdmin() public {
-        vm.prank(estranho);
+        vm.prank(stranger);
         vm.expectRevert();
         orq.proposeSetTaxaBps(50);
     }
 
-    function test_ProposeSetTaxaBps_RevertsAcimaDoMaximo() public {
+    function test_ProposeSetTaxaBps_RevertsAboveMax() public {
         vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(OfertaOrquestrador.TaxaExcedeMaximo.selector, 101, 100));
         orq.proposeSetTaxaBps(101);
     }
 
-    function test_ExecuteSetTaxaBps_RevertsAcimaDoMaximo_MesmoChamadoDireto() public {
-        // Mesma lição já aplicada em LiquidacaoSecundaria.executeSetTaxaSecundarioBps: o teto é
-        // validado também no execute, não só no propose.
+    function test_ExecuteSetTaxaBps_RevertsAboveMax_EvenWhenCalledDirectly() public {
+        // Same lesson already applied in LiquidacaoSecundaria.executeSetTaxaSecundarioBps: the cap
+        // is also validated in execute, not only in propose.
         vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(OfertaOrquestrador.TaxaExcedeMaximo.selector, 101, 100));
         orq.executeSetTaxaBps(101);
     }
 
-    function test_SetTaxaBps_RespeitaTimelock() public {
+    function test_SetTaxaBps_RespectsTimelock() public {
         vm.prank(admin);
         orq.proposeSetTaxaBps(50);
 
@@ -695,7 +789,7 @@ contract OfertaOrquestradorTest is Test {
         assertEq(orq.taxaBps(), 50);
     }
 
-    function test_SetProtocoloWallet_RespeitaTimelockERejeitaZeroAddress() public {
+    function test_SetProtocoloWallet_RespectsTimelockAndRejectsZeroAddress() public {
         address novo = makeAddr("novoProtocoloWallet");
 
         vm.prank(admin);
@@ -715,7 +809,7 @@ contract OfertaOrquestradorTest is Test {
         assertEq(orq.protocoloWallet(), novo);
     }
 
-    function test_SetTetoPorInvestidor_RespeitaTimelock() public {
+    function test_SetTetoPorInvestidor_RespectsTimelock() public {
         vm.prank(admin);
         orq.proposeSetTetoPorInvestidor(2_000_000 ether);
 
@@ -732,10 +826,10 @@ contract OfertaOrquestradorTest is Test {
     // ── Views ───────────────────────────────────────────────────────────────────────────────
 
     function test_NumOfertasDoEmissor() public {
-        assertEq(orq.numOfertasDoEmissor(emissor1), 0);
-        (, address oferta) = _criarOfertaPadrao(emissor1);
-        assertEq(orq.numOfertasDoEmissor(emissor1), 1);
-        assertEq(orq.ofertasPorEmissor(emissor1, 0), oferta);
-        assertEq(orq.ultimaOfertaDoEmissor(emissor1), oferta);
+        assertEq(orq.numOfertasDoEmissor(issuer1), 0);
+        (, address oferta) = _createDefaultOffering(issuer1);
+        assertEq(orq.numOfertasDoEmissor(issuer1), 1);
+        assertEq(orq.ofertasPorEmissor(issuer1, 0), oferta);
+        assertEq(orq.ultimaOfertaDoEmissor(issuer1), oferta);
     }
 }

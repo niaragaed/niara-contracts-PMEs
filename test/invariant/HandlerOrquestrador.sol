@@ -8,17 +8,16 @@ import {OfertaCaptacaoFactory} from "../../src/captacao/OfertaCaptacaoFactory.so
 import {OfertaCaptacao} from "../../src/captacao/OfertaCaptacao.sol";
 import {MockBRL} from "../../src/mocks/MockBRL.sol";
 
-/// @notice Ator de fuzzing stateful do domínio do `OfertaOrquestrador`: expõe uma ação por
-/// função pública (autorizar/revogar emissor, pausar/despausar, criar oferta completa, fechar
-/// a última oferta de um emissor por falha ou por sucesso) para que o motor de invariantes do
-/// Foundry explore sequências aleatórias desses passos.
-/// @dev Mesmo desenho de `test/invariant/Handler.sol`/`HandlerCaptacao.sol` (ver Linhagem no
-/// CLAUDE.md): a maior parte das chamadas de criação usa parâmetros limitados (`bound`) a
-/// combinações válidas dentro dos limites da Res. CVM 88; uma fração (`_chaos`, ~1 em 5) toma
-/// deliberadamente um caminho inválido. Chamadas externas não são envolvidas em try/catch —
-/// com `fail_on_revert = false` (ver foundry.toml), um revert genuíno é tolerado pelo runner e
-/// desfaz atomicamente qualquer efeito colateral desta chamada, inclusive as variáveis "ghost"
-/// abaixo.
+/// @notice Stateful fuzzing actor for the `OfertaOrquestrador` domain: exposes one action per
+/// public function (authorize/revoke issuer, pause/unpause, create a complete offering, close
+/// an issuer's last offering by failure or success) so Foundry's invariant engine explores
+/// random sequences of these steps.
+/// @dev Same design as `test/invariant/Handler.sol`/`HandlerCaptacao.sol` (see Lineage in
+/// CLAUDE.md): most creation calls use parameters bounded (`bound`) to valid combinations
+/// within the CVM Res. 88 limits; a fraction (`_chaos`, ~1 in 5) deliberately takes an invalid
+/// path. External calls are not wrapped in try/catch: with `fail_on_revert = false` (see
+/// foundry.toml), a genuine revert is tolerated by the runner and atomically undoes any side
+/// effect of this call, including the "ghost" variables below.
 contract HandlerOrquestrador is Test {
     OfertaOrquestrador public orq;
     ParticipacaoTokenFactory public tokenFactory;
@@ -26,69 +25,69 @@ contract HandlerOrquestrador is Test {
     MockBRL public moeda;
 
     address public admin;
-    address public agenteOrq;
-    address public agenteGateway;
+    address public orchestratorAgent;
+    address public gatewayAgent;
     address[] public actors;
-    address public investidorFuzz;
+    address public fuzzInvestor;
 
     address[] public tokens;
     address[] public ofertas;
 
-    mapping(address => bool) internal _emissorRastreadoSet;
-    address[] public emissoresRastreados;
+    mapping(address => bool) internal _trackedIssuerSet;
+    address[] public trackedIssuers;
 
-    /// @notice Timestamp de criação de cada oferta rastreada — usado para verificar o limite
-    /// de 180 dias contra o `prazo` gravado (que é um timestamp absoluto).
-    mapping(address => uint256) public ghost_criadoEm;
+    /// @notice Creation timestamp of each tracked offering, used to check the 180-day limit
+    /// against the recorded `prazo` (which is an absolute timestamp).
+    mapping(address => uint256) public ghost_createdAt;
 
-    /// @notice `true` se o emissor estava em `emissoresAutorizados` NO MOMENTO em que aquela
-    /// oferta foi criada (lido antes da chamada, gravado só se a chamada teve sucesso) — prova
-    /// que nenhuma oferta rastreada nasceu de um emissor não autorizado.
-    mapping(address => bool) public ghost_autorizadoNaCriacao;
+    /// @notice `true` if the issuer was in `emissoresAutorizados` AT THE MOMENT that offering
+    /// was created (read before the call, recorded only if the call succeeded): proves that no
+    /// tracked offering was born from an unauthorized issuer.
+    mapping(address => bool) public ghost_authorizedAtCreation;
 
-    /// @notice Vira `true` se `autorizarEmissor`/`revogarEmissor`/`pause`/`unpause` forem
-    /// bem-sucedidos chamados por alguém sem `AGENTE_ROLE` do orquestrador.
+    /// @notice Becomes `true` if `autorizarEmissor`/`revogarEmissor`/`pause`/`unpause` succeed
+    /// when called by someone without the orchestrator's `AGENTE_ROLE`.
     bool public ghost_unauthorizedAdminActionSucceeded;
 
     struct Config {
-        OfertaOrquestrador orq;
+        OfertaOrquestrador orch;
         ParticipacaoTokenFactory tokenFactory;
-        OfertaCaptacaoFactory captacaoFactory;
-        MockBRL moeda;
+        OfertaCaptacaoFactory fundraisingFactory;
+        MockBRL currency;
         address admin;
-        address agenteOrq;
-        address agenteGateway;
+        address orchestratorAgent;
+        address gatewayAgent;
         address[] actors;
-        address investidorFuzz;
+        address fuzzInvestor;
     }
 
     constructor(Config memory config) {
-        orq = config.orq;
+        orq = config.orch;
         tokenFactory = config.tokenFactory;
-        captacaoFactory = config.captacaoFactory;
-        moeda = config.moeda;
+        captacaoFactory = config.fundraisingFactory;
+        moeda = config.currency;
         admin = config.admin;
-        agenteOrq = config.agenteOrq;
-        agenteGateway = config.agenteGateway;
+        orchestratorAgent = config.orchestratorAgent;
+        gatewayAgent = config.gatewayAgent;
         actors = config.actors;
-        investidorFuzz = config.investidorFuzz;
+        fuzzInvestor = config.fuzzInvestor;
     }
 
-    // ── Helpers de seleção ─────────────────────────────────────────────────────────────
+    // ── Selection helpers ──────────────────────────────────────────────────────────────
 
     function _actorAt(uint256 seed) internal view returns (address) {
         return actors[seed % actors.length];
     }
 
-    /// @dev ~1 em 5 chamadas toma o caminho "caótico" (inválido de propósito).
+    /// @dev ~1 in 5 calls takes the "chaotic" path (invalid on purpose).
     function _chaos(uint256 seed) internal pure returns (bool) {
         return seed % 5 == 0;
     }
 
-    function _trackEmissor(address emissor) internal {
-        if (!_emissorRastreadoSet[emissor]) {
-            _emissorRastreadoSet[emissor] = true;
-            emissoresRastreados.push(emissor);
+    function _trackIssuer(address emissor) internal {
+        if (!_trackedIssuerSet[emissor]) {
+            _trackedIssuerSet[emissor] = true;
+            trackedIssuers.push(emissor);
         }
     }
 
@@ -97,169 +96,179 @@ contract HandlerOrquestrador is Test {
     function autorizarEmissor(uint256 actorSeed, uint256 chaosSeed) external {
         address emissor = _actorAt(actorSeed);
         bool chaos = _chaos(chaosSeed);
-        address caller = chaos ? emissor : agenteOrq;
+        address caller = chaos ? emissor : orchestratorAgent;
 
         vm.prank(caller);
         orq.autorizarEmissor(emissor);
 
-        _trackEmissor(emissor);
-        if (caller != agenteOrq) ghost_unauthorizedAdminActionSucceeded = true;
+        _trackIssuer(emissor);
+        if (caller != orchestratorAgent) ghost_unauthorizedAdminActionSucceeded = true;
     }
 
     function revogarEmissor(uint256 actorSeed, uint256 chaosSeed) external {
         address emissor = _actorAt(actorSeed);
         bool chaos = _chaos(chaosSeed);
-        address caller = chaos ? emissor : agenteOrq;
+        address caller = chaos ? emissor : orchestratorAgent;
 
         vm.prank(caller);
         orq.revogarEmissor(emissor);
 
-        if (caller != agenteOrq) ghost_unauthorizedAdminActionSucceeded = true;
+        if (caller != orchestratorAgent) ghost_unauthorizedAdminActionSucceeded = true;
     }
 
     // ── Pausa ──────────────────────────────────────────────────────────────────────────
 
-    function pausarOuDespausar(uint256 actorSeed, uint256 chaosSeed) external {
-        bool estaPausado = orq.paused();
+    function pauseOrUnpause(uint256 actorSeed, uint256 chaosSeed) external {
+        bool isPaused = orq.paused();
         bool chaos = _chaos(chaosSeed);
-        address caller = chaos ? _actorAt(actorSeed) : agenteOrq;
+        address caller = chaos ? _actorAt(actorSeed) : orchestratorAgent;
 
         vm.prank(caller);
-        if (estaPausado) {
+        if (isPaused) {
             orq.unpause();
         } else {
             orq.pause();
         }
 
-        if (caller != agenteOrq) ghost_unauthorizedAdminActionSucceeded = true;
+        if (caller != orchestratorAgent) ghost_unauthorizedAdminActionSucceeded = true;
     }
 
-    // ── Criação atômica ────────────────────────────────────────────────────────────────
+    // ── Atomic creation ────────────────────────────────────────────────────────────────
 
     function criarOfertaCompleta(
         uint256 actorSeed,
-        uint256 metaMaximaSeed,
-        uint256 metaMinimaSeed,
-        uint256 precoSeed,
-        uint256 prazoSeed,
+        uint256 maxTargetSeed,
+        uint256 minTargetSeed,
+        uint256 priceSeed,
+        uint256 deadlineSeed,
         uint256 chaosSeed
     ) external {
         address emissor = _actorAt(actorSeed);
-        ParametrosOferta memory p = _gerarParametros(metaMaximaSeed, metaMinimaSeed, precoSeed, prazoSeed, chaosSeed);
-        if (p.precoPorCota == 0) return; // `_gerarParametros` sinaliza "pular esta chamada"
+        OfferingParams memory p = _generateParams(maxTargetSeed, minTargetSeed, priceSeed, deadlineSeed, chaosSeed);
+        if (p.precoPorCota == 0) return; // `_generateParams` signals "skip this call"
 
-        bytes32 cnpjRef = keccak256(abi.encode("cnpj-fuzz", metaMaximaSeed, actorSeed));
-        _executarCriacao(emissor, p, cnpjRef);
+        bytes32 cnpjRef = keccak256(abi.encode("cnpj-fuzz", maxTargetSeed, actorSeed));
+        _executeCreation(emissor, p, cnpjRef);
     }
 
-    /// @dev Parâmetros agrupados em struct (memória), não soltos como retorno múltiplo —
-    /// mesmo remédio já usado em `IOfertaCaptacao.InitParams` neste repositório para "stack
-    /// too deep" com `via_ir` desligado (ver `foundry.toml`): passar um único ponteiro de
-    /// memória entre funções custa uma unidade de pilha, não uma por campo.
-    struct ParametrosOferta {
+    /// @dev Parameters grouped in a struct (memory), not loose as a multiple return, the same
+    /// remedy already used in `IOfertaCaptacao.InitParams` in this repository for "stack too
+    /// deep" with `via_ir` off (see `foundry.toml`): passing a single memory pointer between
+    /// functions costs one stack slot, not one per field.
+    struct OfferingParams {
         uint256 metaMinima;
         uint256 metaMaxima;
         uint256 precoPorCota;
         uint256 prazo;
     }
 
-    /// @dev `precoPorCota == 0` no retorno sinaliza "pule esta chamada" (o caso raro em que
-    /// `precoSeed` amostrou um preço maior que o próprio teto de oferta, tornando
-    /// `maxCotas == 0`).
-    function _gerarParametros(
-        uint256 metaMaximaSeed,
-        uint256 metaMinimaSeed,
-        uint256 precoSeed,
-        uint256 prazoSeed,
+    /// @dev `precoPorCota == 0` in the return signals "skip this call" (the rare case where
+    /// `priceSeed` sampled a price larger than the offering cap itself, making `maxShares == 0`).
+    function _generateParams(
+        uint256 maxTargetSeed,
+        uint256 minTargetSeed,
+        uint256 priceSeed,
+        uint256 deadlineSeed,
         uint256 chaosSeed
-    ) internal view returns (ParametrosOferta memory p) {
+    ) internal view returns (OfferingParams memory p) {
         uint256 teto = orq.TETO_OFERTA();
-        p.precoPorCota = bound(precoSeed, 1, 1_000 ether);
-        uint256 maxCotas = teto / p.precoPorCota;
-        if (maxCotas == 0) {
+        p.precoPorCota = bound(priceSeed, 1, 1_000 ether);
+        uint256 maxShares = teto / p.precoPorCota;
+        if (maxShares == 0) {
             p.precoPorCota = 0;
             return p;
         }
 
-        uint256 cotas = bound(metaMaximaSeed, 1, maxCotas);
+        uint256 cotas = bound(maxTargetSeed, 1, maxShares);
         p.metaMaxima = cotas * p.precoPorCota;
 
-        uint256 metaMinimaMin = (p.metaMaxima * orq.LOTE_ADICIONAL_DENOMINADOR()) / orq.LOTE_ADICIONAL_NUMERADOR();
-        if (metaMinimaMin == 0) metaMinimaMin = 1;
-        p.metaMinima = bound(metaMinimaSeed, metaMinimaMin, p.metaMaxima);
+        uint256 minTargetFloor = (p.metaMaxima * orq.LOTE_ADICIONAL_DENOMINADOR()) / orq.LOTE_ADICIONAL_NUMERADOR();
+        if (minTargetFloor == 0) minTargetFloor = 1;
+        p.metaMinima = bound(minTargetSeed, minTargetFloor, p.metaMaxima);
 
-        p.prazo = block.timestamp + bound(prazoSeed, 1, orq.PRAZO_MAXIMO());
+        p.prazo = block.timestamp + bound(deadlineSeed, 1, orq.PRAZO_MAXIMO());
 
         if (_chaos(chaosSeed)) {
-            _aplicarChaos(p, chaosSeed, metaMaximaSeed, prazoSeed, teto);
+            _applyChaos(p, chaosSeed, maxTargetSeed, deadlineSeed, teto);
         }
     }
 
-    /// @dev Recebe `p` por referência (struct `memory`) e muta no lugar — o chamador vê o
-    /// resultado sem precisar de retorno.
-    function _aplicarChaos(ParametrosOferta memory p, uint256 chaosSeed, uint256 metaMaximaSeed, uint256 prazoSeed, uint256 teto)
-        internal
-        view
-    {
-        uint256 modo = chaosSeed % 4;
-        if (modo == 0) {
-            p.prazo = block.timestamp + orq.PRAZO_MAXIMO() + 1 + (prazoSeed % 365 days);
-        } else if (modo == 1) {
-            p.metaMaxima = teto + 1 + (metaMaximaSeed % 1_000_000 ether);
-        } else if (modo == 2 && p.metaMinima > 1) {
+    /// @dev Receives `p` by reference (`memory` struct) and mutates it in place; the caller
+    /// sees the result without needing a return value.
+    function _applyChaos(
+        OfferingParams memory p,
+        uint256 chaosSeed,
+        uint256 maxTargetSeed,
+        uint256 deadlineSeed,
+        uint256 teto
+    ) internal view {
+        uint256 mode = chaosSeed % 4;
+        if (mode == 0) {
+            p.prazo = block.timestamp + orq.PRAZO_MAXIMO() + 1 + (deadlineSeed % 365 days);
+        } else if (mode == 1) {
+            p.metaMaxima = teto + 1 + (maxTargetSeed % 1_000_000 ether);
+        } else if (mode == 2 && p.metaMinima > 1) {
             p.metaMinima = p.metaMinima / 2; // tende a violar o lote adicional de 25%
         } else if (p.precoPorCota > 1) {
-            p.metaMaxima = p.metaMaxima + 1; // quebra o múltiplo exato de precoPorCota
+            p.metaMaxima = p.metaMaxima + 1; // breaks the exact multiple of precoPorCota
         }
     }
 
-    function _executarCriacao(address emissor, ParametrosOferta memory p, bytes32 cnpjRef) internal {
-        bool autorizadoAntes = orq.emissoresAutorizados(emissor);
+    function _executeCreation(address emissor, OfferingParams memory p, bytes32 cnpjRef) internal {
+        bool authorizedBefore = orq.emissoresAutorizados(emissor);
 
         vm.prank(emissor);
         (address token, address oferta) = orq.criarOfertaCompleta(
-            "Oferta Fuzz", "nFZ", "Empresa Fuzz", cnpjRef, "2026-FZ", p.metaMinima, p.metaMaxima, p.precoPorCota, p.prazo
+            "Oferta Fuzz",
+            "nFZ",
+            "Empresa Fuzz",
+            cnpjRef,
+            "2026-FZ",
+            p.metaMinima,
+            p.metaMaxima,
+            p.precoPorCota,
+            p.prazo
         );
 
-        // Só chega aqui se NÃO reverteu.
+        // Only reaches here if it did NOT revert.
         tokens.push(token);
         ofertas.push(oferta);
-        ghost_criadoEm[oferta] = block.timestamp;
-        ghost_autorizadoNaCriacao[oferta] = autorizadoAntes;
-        _trackEmissor(emissor);
+        ghost_createdAt[oferta] = block.timestamp;
+        ghost_authorizedAtCreation[oferta] = authorizedBefore;
+        _trackIssuer(emissor);
     }
 
-    // ── Fechamento de ofertas (permite uma segunda criação pelo mesmo emissor) ──────────
+    // ── Closing offerings (allows a second creation by the same issuer) ─────────────────
 
-    function fecharUltimaOfertaComFalha(uint256 actorSeed) external {
+    function closeLastOfferingWithFailure(uint256 actorSeed) external {
         address emissor = _actorAt(actorSeed);
-        address ofertaAddr = orq.ultimaOfertaDoEmissor(emissor);
-        if (ofertaAddr == address(0)) return;
-        if (OfertaCaptacao(ofertaAddr).estado() != OfertaCaptacao.Estado.Aberta) return;
+        address offeringAddr = orq.ultimaOfertaDoEmissor(emissor);
+        if (offeringAddr == address(0)) return;
+        if (OfertaCaptacao(offeringAddr).estado() != OfertaCaptacao.Estado.Aberta) return;
 
-        vm.prank(agenteGateway);
-        OfertaCaptacao(ofertaAddr).cancelar();
+        vm.prank(gatewayAgent);
+        OfertaCaptacao(offeringAddr).cancelar();
     }
 
-    function fecharUltimaOfertaComSucesso(uint256 actorSeed) external {
+    function closeLastOfferingWithSuccess(uint256 actorSeed) external {
         address emissor = _actorAt(actorSeed);
-        address ofertaAddr = orq.ultimaOfertaDoEmissor(emissor);
-        if (ofertaAddr == address(0)) return;
-        OfertaCaptacao oferta = OfertaCaptacao(ofertaAddr);
+        address offeringAddr = orq.ultimaOfertaDoEmissor(emissor);
+        if (offeringAddr == address(0)) return;
+        OfertaCaptacao oferta = OfertaCaptacao(offeringAddr);
         if (oferta.estado() != OfertaCaptacao.Estado.Aberta) return;
 
-        uint256 faltante = oferta.metaMaxima() - oferta.totalArrecadado();
-        if (faltante > 0) {
-            moeda.mint(investidorFuzz, faltante);
-            vm.prank(investidorFuzz);
-            moeda.approve(ofertaAddr, faltante);
-            vm.prank(investidorFuzz);
-            oferta.aportar(faltante);
+        uint256 missing = oferta.metaMaxima() - oferta.totalArrecadado();
+        if (missing > 0) {
+            moeda.mint(fuzzInvestor, missing);
+            vm.prank(fuzzInvestor);
+            moeda.approve(offeringAddr, missing);
+            vm.prank(fuzzInvestor);
+            oferta.aportar(missing);
         }
         oferta.encerrar();
     }
 
-    // ── Views para o InvariantOrquestradorTest ──────────────────────────────────────────
+    // ── Views for InvariantOrquestradorTest ─────────────────────────────────────────────
 
     function numTokens() external view returns (uint256) {
         return tokens.length;
@@ -269,7 +278,7 @@ contract HandlerOrquestrador is Test {
         return ofertas.length;
     }
 
-    function numEmissoresRastreados() external view returns (uint256) {
-        return emissoresRastreados.length;
+    function trackedIssuerCount() external view returns (uint256) {
+        return trackedIssuers.length;
     }
 }

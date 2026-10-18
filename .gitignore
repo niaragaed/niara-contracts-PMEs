@@ -18,11 +18,11 @@ coverage/
 # Docs
 docs/
 
-# Enderecos persistidos entre os dois scripts da demo Sepolia (artefato local, sem segredos,
-# mas regeravel a cada deploy — nao faz sentido versionar)
+# Addresses persisted between the two Sepolia demo scripts (local artifact, no secrets,
+# but regenerated on every deploy, so there is no point versioning it)
 script/output/
 
-# Dotenv file — segredos nunca versionados
+# Dotenv file: secrets are never versioned
 .env
 .env.*
 !.env.example
@@ -31,6 +31,7 @@ script/output/
 .vscode/
 .idea/
 
-# Config local do Claude Code (ex.: includeCoAuthoredBy) — por máquina, nunca
-# versionada; ver CLAUDE.md, "Git / GitHub", para o conteúdo exato a recriar.
-/.claude/
+# Local Claude Code config (e.g. includeCoAuthoredBy): per machine, never
+# versioned; see CLAUDE.md, "Git / GitHub", for the exact content to recreate.
+/.claude/*
+!/.claude/settings.json
